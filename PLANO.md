@@ -3,7 +3,7 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0 ✅ · M1 ✅ · M2 ✅ · M3 (MCP + painel de saída) ✅ — browser do M3 é o próximo**
+Status: **M0 ✅ · M1 ✅ · M2 ✅ · M3 ✅ — M4 (sub-agentes + orquestração) é o próximo**
 Data: 2026-10-10
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
@@ -18,12 +18,18 @@ Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\Rub
     permitido **cria o diretório de fato**; o negado devolve `Blocked:` e **não cria**;
     banner de goal renderiza; `/compact` completa.
 
-**Estado verificado no fim do M3 (MCP + painel de saída)**
+**Estado verificado no fim do M3 (MCP + painel de saída + browser)**
 - RubyCLI: suíte **1129 passando / 0 falhando**, `typecheck`/`lint`/`format:check` limpos.
   Commits `fa3dfec` (MCP para embedders) e `82770a2` (default model + `RUBYCLI_HOME`).
-- RubyDesktop: `typecheck` limpo, build OK. Commit `ec0e131`.
-- `scripts/smoke-mcp.cjs` → PASS, exit 0 (servidor MCP real como subprocesso; ver M3 abaixo).
-- Regressão: `smoke-main.cjs` e `smoke-permissions.cjs` continuam PASS depois de tudo.
+- RubyDesktop: `typecheck` limpo, build OK. Commits `ec0e131` (MCP + output panel) e
+  `a15adfe` (browser via CDP).
+- **Os quatro smoke tests passam com exit 0**, todos contra artefatos buildados e provider ao vivo:
+  | Teste | O que prova |
+  |---|---|
+  | `smoke-main.cjs` | turno real, streaming, sem erros |
+  | `smoke-permissions.cjs` | modal permite/nega; o `mkdir` permitido cria de fato, o negado não cria; goal renderiza; `/compact` completa |
+  | `smoke-mcp.cjs` | servidor MCP real como subprocesso; o modelo chama a tool e recebe o marcador do fixture; servidor quebrado é reportado sem afetar o saudável |
+  | `smoke-browser.cjs` | navegação, digitação e clique via CDP com efeito real na página; back, scroll, screenshot, ref obsoleto rejeitado |
 
 ---
 
@@ -440,7 +446,7 @@ como falha de tool, não como decisão. Era um bug de segurança nas duas direç
 
 ### M3 — MCP + Terminal + Browser
 
-**Desktop** — MCP ✅ e painel de saída ✅ CONCLUÍDOS; browser pendente.
+**Desktop** — ✅ **CONCLUÍDO** (MCP, painel de saída e browser).
 
 **MCP** ✅
 - Painel ([`McpPanel.tsx`](src/renderer/src/components/McpPanel.tsx)): lista cada servidor
@@ -463,12 +469,40 @@ como falha de tool, não como decisão. Era um bug de segurança nas duas direç
   telemetria em vez do transcript — continua útil no meio do turno, quando ainda não há
   nada a dizer. Segue o fim só enquanto o usuário não rolou para cima; limitado a 300 linhas.
 
-**Browser** — pendente
+**Browser** ✅
 - `WebContentsView` (Electron 44; `BrowserView` está deprecado) + CDP via
-  `webContents.debugger.attach('1.3')`. Tools novas
-  `browser_open/navigate/snapshot/click/type/scroll/screenshot`, registradas no
-  `ToolRegistry` e executadas por RPC de volta ao main. Snapshot para o LLM via
-  `Accessibility.getFullAXTree`.
+  `webContents.debugger.attach('1.3')`. Tools `browser_open/navigate/snapshot/click/type/scroll/back/screenshot/close`
+  registradas no `ToolRegistry` e executadas por RPC de volta ao main
+  ([`browser-tools.ts`](src/engine-host/browser-tools.ts) ↔ [`browser.ts`](src/main/browser.ts)).
+- Snapshot para o LLM via `Accessibility.getFullAXTree`: árvore de roles/nomes em vez de HTML
+  cru — muito mais barato em tokens e mais robusto que pedir ao modelo para escrever seletores.
+  Elementos interativos ganham `[ref=eN]`, reconstruídos a cada snapshot; um ref antigo é
+  **rejeitado**, porque resolveria para outro elemento na página nova.
+- Input real (`Input.dispatchMouseEvent`/`insertText`), então páginas que escutam eventos
+  confiáveis funcionam. Só `http(s)`: `file://` deixaria uma página ler o disco local.
+- **Entregável:** ✅ as três integrações do M3 funcionando.
+
+**Verificação do M3 (browser):** `scripts/smoke-browser.cjs` → PASS, exit 0. As asserções são
+sobre o **estado da página**, não sobre a saída das tools: digitar e clicar executa o listener
+DOM da própria página, que devolve o valor digitado (`FIXTURE-GREETING:Ada`) — prova de que o
+clique foi um evento confiável de verdade. Cobre também navegação, back, scroll, screenshot e
+rejeição de ref obsoleto.
+
+**Três armadilhas encontradas (todas falhas silenciosas):**
+1. Eventos de mouse via CDP exigem o bitmask `buttons`, não só `button` — sem ele o comando
+   reporta sucesso e nenhum `click` chega à página.
+2. O Chromium **descarta input sintético de uma view sem foco**, também reportando sucesso.
+   Resolvido com `Emulation.setFocusEmulationEnabled` em vez de roubar o foco do SO (que seria
+   mal-educado e frágil). Verificado: o mesmo clique que não fazia nada funciona com o foco
+   emulado e a janela em segundo plano.
+3. Uma view de tamanho zero engole input, e o agente pode abrir o browser antes de o renderer
+   medir o placeholder — agora há região de fallback. `Page.captureScreenshot` também espera um
+   frame do compositor que uma view escondida pode nunca produzir, então tem timeout em vez de
+   pendurar o turno.
+
+> Nota: `capturePage()` na janela **não** compõe um `WebContentsView` (é uma camada nativa
+> separada), então essa área sai preta no PNG da janela; a página é capturada via CDP em
+> [`smoke-m3-browser-page.png`](design/smoke-m3-browser-page.png).
 
 **Verificação do M3 (MCP + painel):** `scripts/smoke-mcp.cjs` → PASS, exit 0. Sobe um
 **servidor MCP real como subprocesso** (`scripts/fixtures/echo-mcp-server.cjs`, JSON-RPC
