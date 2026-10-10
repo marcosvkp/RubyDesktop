@@ -1,0 +1,40 @@
+{
+  "name": "ruby-desktop",
+  "version": "0.1.0",
+  "description": "Ruby Desktop — app desktop de agentes conectado ao provider Ruby.",
+  "author": "RubyCLI",
+  "license": "MIT",
+  "private": true,
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "npm run build:engine && electron-vite dev",
+    "build:engine": "vite build --config vite.engine.config.ts && node scripts/copy-skills.mjs",
+    "build": "npm run typecheck && npm run build:engine && electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+  },
+  "dependencies": {
+    "@rubyclii/cli": "file:../RubyCLI"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.16.13",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron": "^44.7.0",
+    "electron-vite": "^5.0.0",
+    "lucide-react": "^1.55.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.7",
+    "zustand": "^5.0.15"
+  }
+}

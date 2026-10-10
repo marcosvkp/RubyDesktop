@@ -1,0 +1,149 @@
+/*
+ * Ruby Desktop theme.
+ *
+ * The token values are the ones the RubyCLI site ships in production, read out of
+ * its compiled CSS — see DESIGN.md for the extraction notes. The site is built on
+ * Tailwind v4 + shadcn/ui, so using the same token names means shadcn components
+ * drop in without translation and the identity matches by construction rather
+ * than by imitation.
+ *
+ * Two rules from the design carry real weight:
+ *   - the dark is *warm*: #050304 is near-black with a wine cast, and text is
+ *     #f7eff3, white with a pink cast. Never pure #000 or #fff.
+ *   - magenta is an accent, never a surface. `--color-primary` appears on CTAs,
+ *     icons and active states only.
+ */
+@import "tailwindcss";
+
+/* Self-hosted, same subsets the site serves. */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/Geist-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/GeistMono-latin.woff2") format("woff2");
+}
+
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Surfaces */
+  --color-background: #050304;
+  --color-page: #0b090c;
+  --color-foreground: #f7eff3;
+  --color-card: #0f090c;
+  --color-card-foreground: #f7eff3;
+  --color-popover: #0f090c;
+  --color-popover-foreground: #f7eff3;
+  --color-muted: #1a1417;
+  --color-muted-foreground: #a6979d;
+  --color-accent: #27181b;
+  --color-accent-foreground: #f7eff3;
+  --color-secondary: #1a1417;
+  --color-secondary-foreground: #f1e9ec;
+  --color-copy-muted: #a9a1a7;
+
+  /* Brand and state */
+  --color-primary: #de0068;
+  --color-primary-foreground: #fefbfc;
+  --color-ring: #e83174;
+  --color-destructive: #df202e;
+  --color-model-accent: #ff638d;
+
+  /* The brand mark is a *different* red from the UI magenta. Both appear on the
+     site: the logo is red, the CTA button is magenta. Keep them distinct. */
+  --color-brand: #de0c2d;
+  --color-brand-bright: #f52037;
+  --color-brand-deep: #a40123;
+  --color-wordmark: #898e9a;
+
+  /* Lines */
+  --color-border: #ffffff1a;
+  --color-line: #ffffff17;
+  --color-input: #ffffff1f;
+
+  /* Sidebar */
+  --color-sidebar: #0a0608;
+  --color-sidebar-foreground: #f7eff3;
+  --color-sidebar-primary: #de0068;
+  --color-sidebar-primary-foreground: #fefbfc;
+  --color-sidebar-accent: #1d1218;
+  --color-sidebar-accent-foreground: #f7eff3;
+  --color-sidebar-border: #ffffff1a;
+
+  /* Data viz: context meter, per-agent cost */
+  --color-chart-1: #e83174;
+  --color-chart-2: #ee6a4a;
+  --color-chart-3: #d29922;
+  --color-chart-4: #7e70ec;
+  --color-chart-5: #00afa9;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.7rem;
+  --radius-xl: 1rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    /* The app owns its own scroll regions; the window itself never scrolls. */
+    overflow: hidden;
+  }
+
+  /* Thin, theme-matched scrollbars — the default Chromium ones read as foreign
+     against this palette. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #ffffff1a;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #ffffff2e;
+    background-clip: content-box;
+  }
+
+  ::selection {
+    background: #de006866;
+  }
+}
+
+@utility eyebrow {
+  /* The site's section labels: small, uppercase, magenta, widely tracked. */
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+}
