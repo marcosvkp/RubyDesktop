@@ -17,6 +17,7 @@ import type {
   EngineResponse,
   GrantKeyKind,
   GoalStatus,
+  McpServerDraft,
   PermissionMode,
 } from "@shared/ipc";
 import { IPC } from "@shared/ipc";
@@ -124,6 +125,14 @@ function stopEngine(): void {
   engine = null;
   lastReady = undefined;
   current.removeAllListeners("exit");
+  // Give the engine a moment to close its MCP child processes; killing it outright
+  // can orphan them on Windows, where nothing reaps a detached grandchild. The
+  // kill below is the backstop if it does not exit promptly.
+  try {
+    current.postMessage({ type: "shutdown" } satisfies EngineRequest);
+  } catch {
+    // Channel already closed — nothing to ask.
+  }
   current.kill();
 }
 
@@ -231,6 +240,16 @@ ipcMain.on(IPC.send.setGoalStatus, (_event, status: GoalStatus) =>
   post({ type: "goal", action: "status", status }),
 );
 ipcMain.on(IPC.send.clearGoal, () => post({ type: "goal", action: "clear" }));
+ipcMain.on(IPC.send.refreshMcp, () => post({ type: "mcp", action: "refresh" }));
+ipcMain.on(IPC.send.addMcpServer, (_event, name: string, config: McpServerDraft) =>
+  post({ type: "mcp", action: "add", name, config }),
+);
+ipcMain.on(IPC.send.removeMcpServer, (_event, name: string) =>
+  post({ type: "mcp", action: "remove", name }),
+);
+ipcMain.on(IPC.send.testMcpServer, (_event, name: string, config: McpServerDraft) =>
+  post({ type: "mcp", action: "test", name, config }),
+);
 ipcMain.on(IPC.send.reset, () => post({ type: "reset" }));
 ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 

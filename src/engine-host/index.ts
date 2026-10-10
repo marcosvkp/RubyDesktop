@@ -51,10 +51,21 @@ import {
   noteGoal,
   setGoalStatus,
   clearGoal,
+  // MCP: servers are configured in ~/.rubycli/mcp.json and their tools are merged
+  // into the same registry the built-in tools live in.
+  McpManager,
+  probeMcpServer,
+  loadMcpConfig,
+  saveMcpServer,
+  removeMcpServer,
+  AGENT_DIR,
 } from "@rubyclii/cli";
 import type {
   AgentEvent,
   ConfirmFn,
+  McpClientOpts,
+  McpServerConfig,
+  ObservabilityEvent,
   PermissionMode,
   Provider,
 } from "@rubyclii/cli";
@@ -66,6 +77,9 @@ import type {
   EngineResponse,
   GrantKeyKind,
   GoalSummary,
+  McpServerDraft,
+  McpServerSummary,
+  MetricLine,
   ModelSummary,
 } from "@shared/ipc";
 
@@ -103,6 +117,160 @@ let projectAllowSet = new Set<string>();
 let denyPatterns: string[] = [];
 /** Built from the merged `permissions.ask` patterns; forces a prompt regardless. */
 let forcesConfirmation: (toolName: string, args: Record<string, unknown>) => boolean = () => false;
+
+// --- MCP --------------------------------------------------------------------
+
+let mcp: McpManager | undefined;
+
+/**
+ * How long to wait for an MCP server to connect or list tools.
+ *
+ * A server that hangs must not stall the whole app on startup: the built-in tools
+ * are perfectly usable without it, so a timeout degrades to "this server is
+ * unavailable" rather than "the agent is unavailable".
+ */
+const MCP_TIMEOUT_MS = 15_000;
+
+function mcpOpts(): McpClientOpts {
+  return { callTimeout: MCP_TIMEOUT_MS };
+}
+
+/** Maps the wire draft onto the engine's config shape. */
+function toServerConfig(draft: McpServerDraft): McpServerConfig {
+  return draft.transport === "http"
+    ? { transport: "http", url: draft.url, headers: draft.headers }
+    : { transport: "stdio", command: draft.command, args: draft.args, env: draft.env };
+}
+
+/**
+ * Connects every configured MCP server. Does not report status: the caller must
+ * register the tools first, or the UI would briefly see servers with no tools.
+ */
+async function connectMcp(): Promise<void> {
+  // Drop the previous generation first: a reconnect must not leave orphaned
+  // subprocesses behind, and the old manager's tools are about to be replaced.
+  if (mcp) {
+    await mcp.disconnectAll().catch(() => {});
+    mcp = undefined;
+  }
+
+  const config = await loadMcpConfig(AGENT_DIR);
+  if (!config || Object.keys(config.mcpServers).length === 0) return;
+
+  mcp = await McpManager.create(config, mcpOpts());
+}
+
+/** Reports MCP state. Call after connecting or after tools are registered. */
+function postMcpStatus(): void {
+  const servers: McpServerSummary[] = (mcp?.statuses ?? []).map((status) => ({
+    name: status.rawName,
+    toolPrefix: status.sanitisedName,
+    connected: status.connected,
+    error: status.error,
+    tools: status.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+  }));
+  post({ type: "mcp", servers });
+}
+
+async function handleMcp(request: Extract<EngineRequest, { type: "mcp" }>): Promise<void> {
+  switch (request.action) {
+    case "refresh":
+      // A full rebuild: the tools have to be registered into the registry the
+      // agent actually holds, so reconnecting without rebuilding would leave the
+      // agent calling tools that no longer exist.
+      await buildAgent();
+      post({ type: "status", status: "ready" });
+      return;
+
+    case "add":
+      await saveMcpServer(AGENT_DIR, request.name, toServerConfig(request.config));
+      await buildAgent();
+      post({ type: "status", status: "ready" });
+      return;
+
+    case "remove":
+      await removeMcpServer(AGENT_DIR, request.name);
+      await buildAgent();
+      post({ type: "status", status: "ready" });
+      return;
+
+    case "test": {
+      // A probe touches neither mcp.json nor the running registry, so a server
+      // can be tried before it is trusted with a place in the agent's toolset.
+      const status = await probeMcpServer(
+        request.name,
+        toServerConfig(request.config),
+        mcpOpts(),
+      );
+      post({
+        type: "mcpTest",
+        server: {
+          name: status.rawName,
+          toolPrefix: status.sanitisedName,
+          connected: status.connected,
+          error: status.error,
+          tools: status.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+        },
+      });
+      return;
+    }
+  }
+}
+
+// --- Observability ----------------------------------------------------------
+
+/**
+ * Turns the engine's telemetry into output-panel lines.
+ *
+ * These are about the conversation rather than part of it, which is why they do
+ * not travel as `AgentEvent`s: the panel shows latency, token counts and guard
+ * trips, none of which belong in the transcript the model sees.
+ */
+function onObservability(event: ObservabilityEvent): void {
+  let line: MetricLine | undefined;
+  switch (event.type) {
+    case "llm_call_end":
+      line = {
+        kind: "llm",
+        model: event.model,
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        latencyMs: event.latencyMs,
+        firstTokenLatencyMs: event.firstTokenLatencyMs,
+      };
+      break;
+    case "tool_exec_end":
+      line = {
+        kind: "tool",
+        name: event.name,
+        latencyMs: event.latencyMs,
+        success: event.success,
+        outputBytes: event.outputBytes,
+      };
+      break;
+    case "tool_denied":
+      line = { kind: "denied", name: event.name, reason: event.reason };
+      break;
+    case "guard_triggered":
+      line = { kind: "guard", guard: event.guard, reason: event.reason };
+      break;
+    case "compact_completed":
+      line = {
+        kind: "compact",
+        trigger: event.trigger,
+        detail: `removed ${event.messagesRemoved} messages`,
+      };
+      break;
+    case "compact_failed":
+      line = { kind: "compact", trigger: event.trigger, detail: `failed: ${event.error}` };
+      break;
+    default:
+      // Everything else (call starts, context snapshots, threshold notices) is
+      // either redundant with a line above or too noisy to be worth a row.
+      return;
+  }
+  post({ type: "metric", line });
+}
 
 // --- Approval gate ----------------------------------------------------------
 
@@ -345,6 +513,15 @@ async function buildAgent(): Promise<void> {
   const skills = new SkillRegistry();
   await skills.discover(process.cwd());
 
+  // MCP tools join the same registry as the built-ins, which is what makes an MCP
+  // server indistinguishable from a native tool from the agent's point of view.
+  // A failing server is reported and skipped; it never blocks the agent.
+  await connectMcp();
+  await mcp?.registerTools(tools).catch((err: unknown) => {
+    post({ type: "error", message: `MCP tools unavailable: ${err instanceof Error ? err.message : String(err)}` });
+  });
+  postMcpStatus();
+
   const systemInstruction = await loadSystemInstruction();
 
   toolCount = tools.all().length;
@@ -361,7 +538,7 @@ async function buildAgent(): Promise<void> {
     // model name, and the client it was handed does not expose one. Omitting it
     // silently falls back to 100k, which would make auto-compaction fire at 75k
     // instead of 75% of the model's real window.
-    { model, provider },
+    { model, provider, onObservability },
   );
 
   // Wire the GUI's half of the permission gate. Without these two the executor
@@ -582,6 +759,20 @@ async function handle(request: EngineRequest): Promise<void> {
     case "goal":
       await handleGoal(request);
       return;
+
+    case "mcp":
+      await handleMcp(request);
+      return;
+
+    case "shutdown": {
+      // Close MCP child processes before the process is torn down, otherwise they
+      // outlive the app on Windows, where nothing reaps a detached grandchild.
+      await mcp?.disconnectAll().catch(() => {});
+      mcp = undefined;
+      denyAllPending("Engine shutting down; pending approvals were denied.");
+      process.exit(0);
+      return;
+    }
 
     case "reset": {
       denyAllPending("Session reset; pending approvals were denied.");

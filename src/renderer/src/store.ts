@@ -17,6 +17,9 @@ import type {
   GoalSummary,
   GrantKeyKind,
   GrantsSnapshot,
+  McpServerDraft,
+  McpServerSummary,
+  MetricLine,
   ModelSummary,
   PermissionMode,
 } from "@shared/ipc";
@@ -61,6 +64,11 @@ interface State {
   grants: GrantsSnapshot;
   /** `undefined` = not loaded yet, `null` = loaded and there is no goal. */
   goal?: GoalSummary | null;
+  mcpServers: McpServerSummary[];
+  /** The result of the last "test connection", keyed by nothing — it is a one-off. */
+  mcpTest?: McpServerSummary;
+  /** Output-panel lines, newest last. Capped so a long session cannot grow forever. */
+  metrics: MetricLine[];
 
   handleMessage: (message: EngineResponse) => void;
   /** Append a local notice — used by slash commands, which have no engine reply. */
@@ -79,6 +87,11 @@ interface State {
   noteGoal: (text: string) => void;
   setGoalStatus: (status: GoalStatus) => void;
   clearGoal: () => void;
+  refreshMcp: () => void;
+  addMcpServer: (name: string, config: McpServerDraft) => void;
+  removeMcpServer: (name: string) => void;
+  testMcpServer: (name: string, config: McpServerDraft) => void;
+  clearMcpTest: () => void;
   pickWorkspace: () => void;
   reset: () => void;
   dismissFatal: () => void;
@@ -235,6 +248,8 @@ export const useStore = create<State>((set, get) => ({
   compacting: false,
   permissionMode: "normal",
   grants: { project: [], global: [] },
+  mcpServers: [],
+  metrics: [],
 
   handleMessage: (message) => {
     switch (message.type) {
@@ -295,6 +310,22 @@ export const useStore = create<State>((set, get) => ({
 
       case "goal":
         set({ goal: message.goal });
+        return;
+
+      case "mcp":
+        set({ mcpServers: message.servers });
+        return;
+
+      case "mcpTest":
+        set({ mcpTest: message.server });
+        return;
+
+      case "metric":
+        set((s) => ({
+          // Bounded: this is a live activity log, not a record. Keeping every line
+          // of a long session would grow without limit for no benefit.
+          metrics: [...s.metrics, message.line].slice(-300),
+        }));
         return;
 
       case "compacting":
@@ -435,6 +466,12 @@ export const useStore = create<State>((set, get) => ({
   noteGoal: (text) => window.ruby.noteGoal(text),
   setGoalStatus: (status) => window.ruby.setGoalStatus(status),
   clearGoal: () => window.ruby.clearGoal(),
+
+  refreshMcp: () => window.ruby.refreshMcp(),
+  addMcpServer: (name, config) => window.ruby.addMcpServer(name, config),
+  removeMcpServer: (name) => window.ruby.removeMcpServer(name),
+  testMcpServer: (name, config) => window.ruby.testMcpServer(name, config),
+  clearMcpTest: () => set({ mcpTest: undefined }),
 
   pickWorkspace: () => {
     void window.ruby.pickWorkspace().then((path) => {

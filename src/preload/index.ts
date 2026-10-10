@@ -43,6 +43,14 @@ const api: RubyDesktopApi = {
 
   clearGoal: () => ipcRenderer.send(IPC.send.clearGoal),
 
+  refreshMcp: () => ipcRenderer.send(IPC.send.refreshMcp),
+
+  addMcpServer: (name, config) => ipcRenderer.send(IPC.send.addMcpServer, name, config),
+
+  removeMcpServer: (name) => ipcRenderer.send(IPC.send.removeMcpServer, name),
+
+  testMcpServer: (name, config) => ipcRenderer.send(IPC.send.testMcpServer, name, config),
+
   reset: () => ipcRenderer.send(IPC.send.reset),
 
   refreshModels: () => ipcRenderer.send(IPC.send.refreshModels),

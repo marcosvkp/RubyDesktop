@@ -15,7 +15,13 @@ const MODES: PermissionMode[] = ["normal", "acceptEdits", "plan"];
  * *mode*: it changes what the agent may do without asking, so it should be visible
  * at all times, next to the other always-on state.
  */
-export function StatusBar(): React.JSX.Element {
+export function StatusBar({
+  outputOpen,
+  onToggleOutput,
+}: {
+  outputOpen: boolean;
+  onToggleOutput: () => void;
+}): React.JSX.Element {
   const status = useStore((s) => s.status);
   const used = useStore((s) => s.contextUsed);
   const window_ = useStore((s) => s.contextWindow);
@@ -73,6 +79,20 @@ export function StatusBar(): React.JSX.Element {
         className="rounded px-1.5 py-0.5 transition-colors hover:bg-white/5 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
       >
         {compacting ? "compacting…" : "compact"}
+      </button>
+
+      <button
+        type="button"
+        onClick={onToggleOutput}
+        title="Agent output panel (Ctrl+`)"
+        className={cn(
+          "rounded px-1.5 py-0.5 transition-colors",
+          outputOpen
+            ? "bg-sidebar-accent text-foreground"
+            : "hover:bg-white/5 hover:text-foreground",
+        )}
+      >
+        output
       </button>
 
       <span className="flex-1" />

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
@@ -6,12 +6,16 @@ import { Composer } from "./components/Composer";
 import { StatusBar } from "./components/StatusBar";
 import { GoalBanner } from "./components/GoalBanner";
 import { ApprovalModal } from "./components/ApprovalModal";
+import { OutputPanel } from "./components/OutputPanel";
+import { McpPanel } from "./components/McpPanel";
 import { useStore } from "./store";
 
 export function App(): React.JSX.Element {
   const fatal = useStore((s) => s.fatal);
   const dismissFatal = useStore((s) => s.dismissFatal);
   const workspace = useStore((s) => s.workspace);
+  const [showOutput, setShowOutput] = useState(false);
+  const [showMcp, setShowMcp] = useState(false);
 
   // Read the workspace once for the initial paint; the engine's `ready` message
   // confirms it a moment later.
@@ -23,19 +27,41 @@ export function App(): React.JSX.Element {
     });
   }, []);
 
+  // Ctrl/Cmd+` toggles the output panel, matching the terminal shortcut people
+  // already have in their fingers.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "`") {
+        event.preventDefault();
+        setShowOutput((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       <TitleBar />
       <div className="flex min-h-0 flex-1">
-        <Sidebar workspace={workspace} />
+        <Sidebar
+          workspace={workspace}
+          onToggleMcp={() => setShowMcp((v) => !v)}
+          mcpOpen={showMcp}
+        />
         <main className="flex min-w-0 flex-1 flex-col bg-page">
           {fatal ? <FatalBanner message={fatal} onDismiss={dismissFatal} /> : null}
           <GoalBanner />
           <ChatView />
+          {showOutput ? <OutputPanel onClose={() => setShowOutput(false)} /> : null}
           <Composer />
         </main>
+        {showMcp ? <McpPanel onClose={() => setShowMcp(false)} /> : null}
       </div>
-      <StatusBar />
+      <StatusBar
+        outputOpen={showOutput}
+        onToggleOutput={() => setShowOutput((v) => !v)}
+      />
       {/* Last in the tree so it paints above everything and captures the keyboard. */}
       <ApprovalModal />
     </div>

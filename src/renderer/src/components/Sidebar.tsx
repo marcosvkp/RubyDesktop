@@ -1,6 +1,6 @@
-import { FolderClosed, FolderTree, Wrench, Sparkles, ShieldCheck } from "lucide-react";
+import { FolderClosed, FolderTree, Wrench, Sparkles, ShieldCheck, Plug } from "lucide-react";
 import { useStore } from "../store";
-import { shortenPath } from "../lib/utils";
+import { cn, shortenPath } from "../lib/utils";
 
 /**
  * Workspace rail.
@@ -9,14 +9,24 @@ import { shortenPath } from "../lib/utils";
  * engine in the new directory, which is what isolates sessions, permission grants,
  * goals and path containment from each other.
  */
-export function Sidebar({ workspace }: { workspace: string }): React.JSX.Element {
+export function Sidebar({
+  workspace,
+  onToggleMcp,
+  mcpOpen,
+}: {
+  workspace: string;
+  onToggleMcp: () => void;
+  mcpOpen: boolean;
+}): React.JSX.Element {
   const engine = useStore((s) => s.engine);
   const reset = useStore((s) => s.reset);
   const items = useStore((s) => s.items);
   const pickWorkspace = useStore((s) => s.pickWorkspace);
   const grants = useStore((s) => s.grants);
+  const mcpServers = useStore((s) => s.mcpServers);
 
   const grantCount = grants.project.length + grants.global.length;
+  const mcpTools = mcpServers.reduce((n, s) => n + s.tools.length, 0);
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
@@ -54,6 +64,26 @@ export function Sidebar({ workspace }: { workspace: string }): React.JSX.Element
       </div>
 
       <div className="flex-1" />
+
+      <div className="border-t border-sidebar-border px-3 py-2">
+        <button
+          type="button"
+          onClick={onToggleMcp}
+          className={cn(
+            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] transition-colors",
+            mcpOpen
+              ? "bg-sidebar-accent text-foreground"
+              : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+          )}
+        >
+          <Plug className="h-3.5 w-3.5 text-chart-1" />
+          <span>MCP</span>
+          <span className="flex-1" />
+          <span className="font-mono">
+            {mcpServers.length > 0 ? `${mcpServers.length}s · ${mcpTools}t` : "none"}
+          </span>
+        </button>
+      </div>
 
       {engine ? (
         <div className="space-y-1.5 border-t border-sidebar-border px-4 py-3 text-[11px] text-muted-foreground">

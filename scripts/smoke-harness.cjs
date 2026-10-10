@@ -27,7 +27,15 @@ const CHANNEL = "ruby:engine-message";
  *   onIdle()            — the turn finished (a `done` event was seen)
  *   screenshot(path)    — capture the window to a PNG; never fatal
  */
-function runScenario({ name, prompt, workspace, screenshotPath, timeoutMs = 180_000, hooks = {} }) {
+function runScenario({
+  name,
+  prompt,
+  workspace,
+  screenshotPath,
+  timeoutMs = 180_000,
+  env,
+  hooks = {},
+}) {
   const log = (...args) => console.log(`[${name}]`, ...args);
   let engine = null;
   let win = null;
@@ -133,6 +141,9 @@ function runScenario({ name, prompt, workspace, screenshotPath, timeoutMs = 180_
       cwd: workspace,
       stdio: "pipe",
       serviceName: `ruby-engine-${name}`,
+      // `env` lets a scenario redirect the agent's state directory (RUBYCLI_HOME)
+      // so it never touches the developer's real ~/.rubycli.
+      ...(env ? { env: { ...process.env, ...env } } : {}),
     });
 
     engine.on("message", async (message) => {
@@ -251,6 +262,16 @@ function runScenario({ name, prompt, workspace, screenshotPath, timeoutMs = 180_
       engine?.postMessage({ type: "goal", action: "status", status }),
     );
     ipcMain.on("ruby:clear-goal", () => engine?.postMessage({ type: "goal", action: "clear" }));
+    ipcMain.on("ruby:refresh-mcp", () => engine?.postMessage({ type: "mcp", action: "refresh" }));
+    ipcMain.on("ruby:add-mcp-server", (_e, name, config) =>
+      engine?.postMessage({ type: "mcp", action: "add", name, config }),
+    );
+    ipcMain.on("ruby:remove-mcp-server", (_e, name) =>
+      engine?.postMessage({ type: "mcp", action: "remove", name }),
+    );
+    ipcMain.on("ruby:test-mcp-server", (_e, name, config) =>
+      engine?.postMessage({ type: "mcp", action: "test", name, config }),
+    );
     ipcMain.on("ruby:reset", () => engine?.postMessage({ type: "reset" }));
     ipcMain.on("ruby:refresh-models", () => engine?.postMessage({ type: "hello" }));
 

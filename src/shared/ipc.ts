@@ -84,6 +84,53 @@ export interface GoalSummary {
   updatedAt: string;
 }
 
+// --- MCP --------------------------------------------------------------------
+
+/** A tool an MCP server exposes. `name` is the server-local name, not the prefixed one. */
+export interface McpToolSummary {
+  name: string;
+  description: string;
+}
+
+/** One configured MCP server and whether it is usable. */
+export interface McpServerSummary {
+  /** The name as configured in mcp.json (the key the user edits). */
+  name: string;
+  /** The name that appears in tool names, after sanitisation. */
+  toolPrefix: string;
+  connected: boolean;
+  /** Present when the server failed to connect, or connected but could not list tools. */
+  error?: string;
+  tools: McpToolSummary[];
+}
+
+/**
+ * An MCP server definition as the UI builds it.
+ *
+ * Deliberately a plain shape rather than the engine's `McpServerConfig`: the
+ * renderer constructs this from form fields and must not depend on engine types.
+ */
+export type McpServerDraft =
+  | { transport: "stdio"; command: string; args?: string[]; env?: Record<string, string> }
+  | { transport: "http"; url: string; headers?: Record<string, string> };
+
+// --- Metrics (the output panel) ---------------------------------------------
+
+/**
+ * A single line in the agent output panel.
+ *
+ * Sourced from the engine's observability stream rather than from `AgentEvent`,
+ * because latency, token counts and guard trips are not part of the agent's
+ * conversation — they are telemetry about it.
+ */
+export type MetricLine =
+  | { kind: "llm"; model: string; inputTokens: number; outputTokens: number; latencyMs: number; firstTokenLatencyMs?: number }
+  | { kind: "tool"; name: string; latencyMs: number; success: boolean; outputBytes: number }
+  | { kind: "denied"; name: string; reason: string }
+  | { kind: "guard"; guard: string; reason: string }
+  | { kind: "compact"; trigger: string; detail: string };
+
+
 // --- Engine protocol --------------------------------------------------------
 
 /** Messages sent from the main process to the engine host. */
@@ -107,6 +154,17 @@ export type EngineRequest =
   | { type: "goal"; action: "note"; text: string }
   | { type: "goal"; action: "status"; status: GoalStatus }
   | { type: "goal"; action: "clear" }
+  | { type: "mcp"; action: "refresh" }
+  | { type: "mcp"; action: "add"; name: string; config: McpServerDraft }
+  | { type: "mcp"; action: "remove"; name: string }
+  | { type: "mcp"; action: "test"; name: string; config: McpServerDraft }
+  /**
+   * Ask the engine to release its resources and exit.
+   *
+   * MCP servers are child processes; killing the engine outright can leave them
+   * orphaned, so the host gets a chance to close them first.
+   */
+  | { type: "shutdown" }
   | { type: "reset" };
 
 /** Messages sent from the engine host back to the main process. */
@@ -130,6 +188,10 @@ export type EngineResponse =
   | { type: "permissionMode"; mode: PermissionMode }
   | { type: "grants"; grants: GrantsSnapshot }
   | { type: "goal"; goal: GoalSummary | null }
+  | { type: "mcp"; servers: McpServerSummary[] }
+  /** The result of testing one server; does not change the running registry. */
+  | { type: "mcpTest"; server: McpServerSummary }
+  | { type: "metric"; line: MetricLine }
   | { type: "compacting"; active: boolean }
   | { type: "error"; message: string }
   | { type: "fatal"; message: string };
@@ -176,6 +238,14 @@ export interface RubyDesktopApi {
   setGoalStatus(status: GoalStatus): void;
   /** Delete the goal. */
   clearGoal(): void;
+  /** Re-read mcp.json, reconnect every server and report their tools. */
+  refreshMcp(): void;
+  /** Add or replace a server in mcp.json, then reconnect. */
+  addMcpServer(name: string, config: McpServerDraft): void;
+  /** Remove a server from mcp.json, then reconnect. */
+  removeMcpServer(name: string): void;
+  /** Connect to one server and list its tools, without saving or registering. */
+  testMcpServer(name: string, config: McpServerDraft): void;
   /** Clear the conversation and start a fresh session. */
   reset(): void;
   /** Ask the engine to refresh its model catalog. */
@@ -206,6 +276,10 @@ export const IPC = {
     noteGoal: "ruby:note-goal",
     setGoalStatus: "ruby:set-goal-status",
     clearGoal: "ruby:clear-goal",
+    refreshMcp: "ruby:refresh-mcp",
+    addMcpServer: "ruby:add-mcp-server",
+    removeMcpServer: "ruby:remove-mcp-server",
+    testMcpServer: "ruby:test-mcp-server",
     reset: "ruby:reset",
     refreshModels: "ruby:refresh-models",
   },
