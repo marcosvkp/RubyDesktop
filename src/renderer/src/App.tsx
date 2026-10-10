@@ -8,14 +8,20 @@ import { GoalBanner } from "./components/GoalBanner";
 import { ApprovalModal } from "./components/ApprovalModal";
 import { OutputPanel } from "./components/OutputPanel";
 import { McpPanel } from "./components/McpPanel";
+import { BrowserPanel, BrowserHiddenNotice } from "./components/BrowserPanel";
 import { useStore } from "./store";
 
 export function App(): React.JSX.Element {
   const fatal = useStore((s) => s.fatal);
   const dismissFatal = useStore((s) => s.dismissFatal);
   const workspace = useStore((s) => s.workspace);
+  const browserOpen = useStore((s) => s.browser.open);
   const [showOutput, setShowOutput] = useState(false);
   const [showMcp, setShowMcp] = useState(false);
+  // The panel starts hidden; it is revealed when the agent opens the browser, or
+  // when the user asks for it. Kept separate from the engine's own state so
+  // hiding the panel does not close the page the agent is working with.
+  const [showBrowser, setShowBrowser] = useState(false);
 
   // Read the workspace once for the initial paint; the engine's `ready` message
   // confirms it a moment later.
@@ -26,6 +32,17 @@ export function App(): React.JSX.Element {
       }
     });
   }, []);
+
+  // Reveal the browser as soon as the engine opens one: an agent driving a page
+  // the user cannot see is the one outcome worth preventing outright.
+  useEffect(() => {
+    if (browserOpen) setShowBrowser(true);
+  }, [browserOpen]);
+
+  const closeBrowserPanel = (): void => {
+    setShowBrowser(false);
+    window.ruby.closeBrowser();
+  };
 
   // Ctrl/Cmd+` toggles the output panel, matching the terminal shortcut people
   // already have in their fingers.
@@ -48,15 +65,22 @@ export function App(): React.JSX.Element {
           workspace={workspace}
           onToggleMcp={() => setShowMcp((v) => !v)}
           mcpOpen={showMcp}
+          onToggleBrowser={() => {
+            if (showBrowser) closeBrowserPanel();
+            else window.ruby.openBrowser();
+          }}
+          browserOpen={showBrowser}
         />
         <main className="flex min-w-0 flex-1 flex-col bg-page">
           {fatal ? <FatalBanner message={fatal} onDismiss={dismissFatal} /> : null}
           <GoalBanner />
+          {!showBrowser ? <BrowserHiddenNotice onShow={() => setShowBrowser(true)} /> : null}
           <ChatView />
           {showOutput ? <OutputPanel onClose={() => setShowOutput(false)} /> : null}
           <Composer />
         </main>
         {showMcp ? <McpPanel onClose={() => setShowMcp(false)} /> : null}
+        {showBrowser ? <BrowserPanel onClose={closeBrowserPanel} /> : null}
       </div>
       <StatusBar
         outputOpen={showOutput}

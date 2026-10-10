@@ -16,7 +16,13 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, "src/main/index.ts") },
+        input: {
+          index: resolve(__dirname, "src/main/index.ts"),
+          // Emitted separately so the smoke tests can require the very same browser
+          // implementation the app runs, rather than a copy free to drift.
+          "browser-service": resolve(__dirname, "src/main/browser-service.ts"),
+          browser: resolve(__dirname, "src/main/browser.ts"),
+        },
       },
     },
     resolve: {

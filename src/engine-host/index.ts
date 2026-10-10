@@ -69,6 +69,7 @@ import type {
   PermissionMode,
   Provider,
 } from "@rubyclii/cli";
+import { BrowserBridge, registerBrowserTools } from "./browser-tools.js";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -117,6 +118,19 @@ let projectAllowSet = new Set<string>();
 let denyPatterns: string[] = [];
 /** Built from the merged `permissions.ask` patterns; forces a prompt regardless. */
 let forcesConfirmation: (toolName: string, args: Record<string, unknown>) => boolean = () => false;
+
+// --- Browser ----------------------------------------------------------------
+
+/**
+ * Proxy for the main process's embedded browser.
+ *
+ * The engine cannot reach Electron, so `browser_*` tools RPC into main. Created
+ * eagerly rather than lazily: the tools must exist in the registry from the first
+ * turn, or the model would never learn it can browse.
+ */
+const browserBridge = new BrowserBridge((id, method, params) => {
+  post({ type: "browserRequest", id, method, params });
+});
 
 // --- MCP --------------------------------------------------------------------
 
@@ -522,6 +536,10 @@ async function buildAgent(): Promise<void> {
   });
   postMcpStatus();
 
+  // Browser tools are always registered: they fail with a clear message if the
+  // panel is closed, which is better than the model not knowing browsing exists.
+  registerBrowserTools(tools, browserBridge);
+
   const systemInstruction = await loadSystemInstruction();
 
   toolCount = tools.all().length;
@@ -616,6 +634,7 @@ async function runPrompt(text: string): Promise<void> {
     // A turn that ends with an unanswered approval would leave the modal on
     // screen forever; settle them before reporting the turn as finished.
     denyAllPending("Turn ended with pending approvals; they were denied.");
+    browserBridge.failAll("Turn ended before the browser operation completed.");
     running = false;
     reportUsage();
     post({ type: "status", status: "ready" });
@@ -763,6 +782,11 @@ async function handle(request: EngineRequest): Promise<void> {
     case "mcp":
       await handleMcp(request);
       return;
+
+    case "browserResult": {
+      browserBridge.resolve(request.id, request.ok, request.result, request.error);
+      return;
+    }
 
     case "shutdown": {
       // Close MCP child processes before the process is torn down, otherwise they

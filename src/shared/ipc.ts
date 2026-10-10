@@ -114,6 +114,49 @@ export type McpServerDraft =
   | { transport: "stdio"; command: string; args?: string[]; env?: Record<string, string> }
   | { transport: "http"; url: string; headers?: Record<string, string> };
 
+// --- Browser (the agent's controllable browser) -----------------------------
+
+/**
+ * Browser operations the engine may ask the main process to perform.
+ *
+ * The engine host has no Electron access by design — it is plain Node so it could
+ * run under any supervisor — so the browser tools it registers are thin proxies
+ * that RPC into the main process, which owns the `WebContentsView`.
+ */
+export type BrowserMethod =
+  | "open"
+  | "navigate"
+  | "back"
+  | "snapshot"
+  | "click"
+  | "type"
+  | "scroll"
+  | "screenshot"
+  | "close";
+
+/** Arguments per method. Kept explicit so both sides cannot drift. */
+export interface BrowserParams {
+  open: { url?: string };
+  navigate: { url: string };
+  back: Record<string, never>;
+  snapshot: Record<string, never>;
+  click: { ref: string };
+  type: { ref: string; text: string; submit?: boolean };
+  scroll: { direction: "up" | "down" | "top" | "bottom"; amount?: number };
+  screenshot: Record<string, never>;
+  close: Record<string, never>;
+}
+
+/** What a browser operation returns to the engine. */
+export interface BrowserResult {
+  /** A text rendering the model reads: the accessibility tree, or a status line. */
+  text: string;
+  /** Page URL after the operation, when there is one. */
+  url?: string;
+  /** Page title after the operation, when there is one. */
+  title?: string;
+}
+
 // --- Metrics (the output panel) ---------------------------------------------
 
 /**
@@ -159,6 +202,17 @@ export type EngineRequest =
   | { type: "mcp"; action: "remove"; name: string }
   | { type: "mcp"; action: "test"; name: string; config: McpServerDraft }
   /**
+   * The answer to a browser RPC. The engine is blocked on this, so every path that
+   * could leave it unanswered must settle it.
+   */
+  | {
+      type: "browserResult";
+      id: string;
+      ok: boolean;
+      result?: BrowserResult;
+      error?: string;
+    }
+  /**
    * Ask the engine to release its resources and exit.
    *
    * MCP servers are child processes; killing the engine outright can leave them
@@ -192,6 +246,10 @@ export type EngineResponse =
   /** The result of testing one server; does not change the running registry. */
   | { type: "mcpTest"; server: McpServerSummary }
   | { type: "metric"; line: MetricLine }
+  /** A browser tool call from the engine, to be performed by the main process. */
+  | { type: "browserRequest"; id: string; method: BrowserMethod; params: unknown }
+  /** The browser panel opened, closed or changed page. */
+  | { type: "browserState"; open: boolean; url?: string; title?: string }
   | { type: "compacting"; active: boolean }
   | { type: "error"; message: string }
   | { type: "fatal"; message: string };
@@ -246,6 +304,17 @@ export interface RubyDesktopApi {
   removeMcpServer(name: string): void;
   /** Connect to one server and list its tools, without saving or registering. */
   testMcpServer(name: string, config: McpServerDraft): void;
+  /** Show the embedded browser. The main process owns the view and its bounds. */
+  openBrowser(url?: string): void;
+  /** Hide and destroy the embedded browser view. */
+  closeBrowser(): void;
+  /**
+   * Tell the main process where the browser should sit.
+   *
+   * Only the renderer knows the layout, so it measures the placeholder it reserved
+   * and reports the rectangle; the view is then positioned to match exactly.
+   */
+  setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): void;
   /** Clear the conversation and start a fresh session. */
   reset(): void;
   /** Ask the engine to refresh its model catalog. */
@@ -280,6 +349,9 @@ export const IPC = {
     addMcpServer: "ruby:add-mcp-server",
     removeMcpServer: "ruby:remove-mcp-server",
     testMcpServer: "ruby:test-mcp-server",
+    openBrowser: "ruby:open-browser",
+    closeBrowser: "ruby:close-browser",
+    setBrowserBounds: "ruby:set-browser-bounds",
     reset: "ruby:reset",
     refreshModels: "ruby:refresh-models",
   },

@@ -10,6 +10,8 @@ import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "elec
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { BrowserController } from "./browser.js";
+import { createBrowserService } from "./browser-service.js";
 import type {
   ApprovalDecision,
   ApprovalScope,
@@ -88,6 +90,12 @@ function startEngine(): void {
 
   engine.on("message", (message: EngineResponse) => {
     if (message.type === "ready") lastReady = message;
+    // Browser RPCs are handled here rather than relayed: they are addressed to the
+    // main process, and the renderer has no business performing them.
+    if (message.type === "browserRequest") {
+      void browserService.handle(message.id, message.method, message.params);
+      return;
+    }
     sendToRenderer(message);
   });
 
@@ -135,6 +143,40 @@ function stopEngine(): void {
   }
   current.kill();
 }
+
+// --- Embedded browser -------------------------------------------------------
+
+const browser = new BrowserController(() => mainWindow);
+/** Where the renderer says the browser placeholder sits, in window coordinates. */
+let browserBounds = { x: 0, y: 0, width: 0, height: 0 };
+
+/** Tells the renderer whether the browser is open, so it can reserve space. */
+function reportBrowserState(): void {
+  const info = browser.info();
+  sendToRenderer({
+    type: "browserState",
+    open: browser.isOpen,
+    url: info?.url,
+    title: info?.title,
+  });
+}
+
+const browserService = createBrowserService({
+  controller: browser,
+  get screenshotDir() {
+    return join(app.getPath("userData"), "browser-screenshots");
+  },
+  onState: reportBrowserState,
+  reply: (id, ok, result, error) => post({ type: "browserResult", id, ok, result, error }),
+  onUserError: (message) => sendToRenderer({ type: "error", message }),
+  // The agent can open the browser before the panel has measured itself; a
+  // zero-sized view silently swallows clicks, so fall back to the right half.
+  defaultBounds: () => {
+    const { width, height } = mainWindow?.getContentBounds() ?? { width: 1440, height: 920 };
+    const panel = Math.max(360, Math.round(width * 0.46));
+    return { x: width - panel, y: 0, width: panel, height };
+  },
+});
 
 /**
  * Points the engine at a new workspace and restarts it.
@@ -188,7 +230,12 @@ function createWindow(): void {
     void mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
 
+  // The browser view is a child of the window and lives in window coordinates, so
+  // it must be destroyed with the window rather than outliving it. Its position is
+  // driven by the renderer, which is the only side that knows the layout: it
+  // measures its placeholder and reports the rectangle.
   mainWindow.on("closed", () => {
+    browser.close();
     mainWindow = null;
   });
 }
@@ -250,6 +297,36 @@ ipcMain.on(IPC.send.removeMcpServer, (_event, name: string) =>
 ipcMain.on(IPC.send.testMcpServer, (_event, name: string, config: McpServerDraft) =>
   post({ type: "mcp", action: "test", name, config }),
 );
+
+ipcMain.on(IPC.send.openBrowser, (_event, url?: string) => {
+  if (!browser.isOpen) browser.open(browserBounds);
+  browserService.setBounds(browserBounds);
+  reportBrowserState();
+  if (url) {
+    // A user-initiated navigation is not an engine tool call, so a failure here
+    // has to be surfaced directly rather than as a tool result.
+    void browser.navigate(url).then(reportBrowserState, (err: unknown) => {
+      sendToRenderer({
+        type: "error",
+        message: `Could not open ${url}: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    });
+  }
+});
+
+ipcMain.on(IPC.send.closeBrowser, () => {
+  browser.close();
+  reportBrowserState();
+});
+
+ipcMain.on(
+  IPC.send.setBrowserBounds,
+  (_event, bounds: { x: number; y: number; width: number; height: number }) => {
+    browserBounds = bounds;
+    browserService.setBounds(browserBounds);
+  },
+);
+
 ipcMain.on(IPC.send.reset, () => post({ type: "reset" }));
 ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 

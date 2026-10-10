@@ -51,6 +51,12 @@ const api: RubyDesktopApi = {
 
   testMcpServer: (name, config) => ipcRenderer.send(IPC.send.testMcpServer, name, config),
 
+  openBrowser: (url) => ipcRenderer.send(IPC.send.openBrowser, url),
+
+  closeBrowser: () => ipcRenderer.send(IPC.send.closeBrowser),
+
+  setBrowserBounds: (bounds) => ipcRenderer.send(IPC.send.setBrowserBounds, bounds),
+
   reset: () => ipcRenderer.send(IPC.send.reset),
 
   refreshModels: () => ipcRenderer.send(IPC.send.refreshModels),

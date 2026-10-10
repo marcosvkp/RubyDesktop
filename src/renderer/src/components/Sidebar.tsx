@@ -1,4 +1,4 @@
-import { FolderClosed, FolderTree, Wrench, Sparkles, ShieldCheck, Plug } from "lucide-react";
+import { FolderClosed, FolderTree, Wrench, Sparkles, ShieldCheck, Plug, Globe } from "lucide-react";
 import { useStore } from "../store";
 import { cn, shortenPath } from "../lib/utils";
 
@@ -13,10 +13,14 @@ export function Sidebar({
   workspace,
   onToggleMcp,
   mcpOpen,
+  onToggleBrowser,
+  browserOpen,
 }: {
   workspace: string;
   onToggleMcp: () => void;
   mcpOpen: boolean;
+  onToggleBrowser: () => void;
+  browserOpen: boolean;
 }): React.JSX.Element {
   const engine = useStore((s) => s.engine);
   const reset = useStore((s) => s.reset);
@@ -82,6 +86,22 @@ export function Sidebar({
           <span className="font-mono">
             {mcpServers.length > 0 ? `${mcpServers.length}s · ${mcpTools}t` : "none"}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleBrowser}
+          className={cn(
+            "mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] transition-colors",
+            browserOpen
+              ? "bg-sidebar-accent text-foreground"
+              : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+          )}
+        >
+          <Globe className="h-3.5 w-3.5 text-chart-4" />
+          <span>Browser</span>
+          <span className="flex-1" />
+          <span className="font-mono">{browserOpen ? "open" : "closed"}</span>
         </button>
       </div>
 

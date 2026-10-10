@@ -69,6 +69,8 @@ interface State {
   mcpTest?: McpServerSummary;
   /** Output-panel lines, newest last. Capped so a long session cannot grow forever. */
   metrics: MetricLine[];
+  /** Whether the embedded browser view is mounted, and what it is showing. */
+  browser: { open: boolean; url?: string; title?: string };
 
   handleMessage: (message: EngineResponse) => void;
   /** Append a local notice — used by slash commands, which have no engine reply. */
@@ -250,6 +252,7 @@ export const useStore = create<State>((set, get) => ({
   grants: { project: [], global: [] },
   mcpServers: [],
   metrics: [],
+  browser: { open: false },
 
   handleMessage: (message) => {
     switch (message.type) {
@@ -326,6 +329,12 @@ export const useStore = create<State>((set, get) => ({
           // of a long session would grow without limit for no benefit.
           metrics: [...s.metrics, message.line].slice(-300),
         }));
+        return;
+
+      case "browserState":
+        set({
+          browser: { open: message.open, url: message.url, title: message.title },
+        });
         return;
 
       case "compacting":

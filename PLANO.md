@@ -3,7 +3,7 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0 ✅ · M1 ✅ · M2 ✅ — M3 é o próximo**
+Status: **M0 ✅ · M1 ✅ · M2 ✅ · M3 (MCP + painel de saída) ✅ — browser do M3 é o próximo**
 Data: 2026-10-10
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
@@ -17,6 +17,13 @@ Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\Rub
   - `scripts/smoke-permissions.cjs` → PASS, exit 0: modal renderiza e permite; o `mkdir`
     permitido **cria o diretório de fato**; o negado devolve `Blocked:` e **não cria**;
     banner de goal renderiza; `/compact` completa.
+
+**Estado verificado no fim do M3 (MCP + painel de saída)**
+- RubyCLI: suíte **1129 passando / 0 falhando**, `typecheck`/`lint`/`format:check` limpos.
+  Commits `fa3dfec` (MCP para embedders) e `82770a2` (default model + `RUBYCLI_HOME`).
+- RubyDesktop: `typecheck` limpo, build OK. Commit `ec0e131`.
+- `scripts/smoke-mcp.cjs` → PASS, exit 0 (servidor MCP real como subprocesso; ver M3 abaixo).
+- Regressão: `smoke-main.cjs` e `smoke-permissions.cjs` continuam PASS depois de tudo.
 
 ---
 
@@ -433,11 +440,48 @@ como falha de tool, não como decisão. Era um bug de segurança nas duas direç
 
 ### M3 — MCP + Terminal + Browser
 
-**Desktop**
-- MCP: UI completa (add/remove/test, ver tools descobertas, aprovar por servidor).
-- **Terminal = painel de saída do agente** (decisão tomada): mostra a saída das ferramentas `bash`/`webFetch` com streaming, por tool call, com exit code e duração. **Zero módulos nativos** — sem `node-pty`. Um PTY interativo real fica para depois, se fizer falta.
-- Browser: `WebContentsView` (Electron 44; `BrowserView` está deprecado) + CDP via `webContents.debugger.attach('1.3')`. Tools novas `browser_open/navigate/snapshot/click/type/scroll/screenshot`, registradas no `ToolRegistry` e executadas por RPC de volta ao main. Snapshot para o LLM via `Accessibility.getFullAXTree`.
-- **Entregável:** as três integrações funcionando.
+**Desktop** — MCP ✅ e painel de saída ✅ CONCLUÍDOS; browser pendente.
+
+**MCP** ✅
+- Painel ([`McpPanel.tsx`](src/renderer/src/components/McpPanel.tsx)): lista cada servidor
+  configurado com se está utilizável, as tools que expõe sob o nome real
+  `mcp__<servidor>__<tool>`, ou o erro que o impediu. Um servidor que não sobe é
+  **reportado**, não some silenciosamente, e não derruba os saudáveis junto.
+- Add por stdio ou HTTP, com passo de **"test connection"** que conecta, lista tools e
+  desconecta sem salvar nem tocar no registry em uso — dá para testar antes de confiar.
+- Tools MCP passam pelo **mesmo modal de aprovação** dos built-ins: uma tool de servidor
+  de terceiros não é mais confiável que um comando de shell.
+- Core: `McpManager.statuses` (cada servidor uma vez, com estado e tools),
+  `probeMcpServer` (o botão de testar), `saveMcpServer`/`removeMcpServer` (escrita atômica
+  de `mcp.json` — um write rasgado tornaria o arquivo inteiro ilegível e levaria todos os
+  outros servidores junto).
+
+**Terminal = painel de saída do agente** ✅ (decisão tomada, sem `node-pty`)
+- [`OutputPanel.tsx`](src/renderer/src/components/OutputPanel.tsx) transmite os eventos de
+  observabilidade do engine: tokens, latência e TTFT por chamada de modelo; duração e
+  tamanho de saída por tool call; negações, guards e compactação. É por isso que ele lê
+  telemetria em vez do transcript — continua útil no meio do turno, quando ainda não há
+  nada a dizer. Segue o fim só enquanto o usuário não rolou para cima; limitado a 300 linhas.
+
+**Browser** — pendente
+- `WebContentsView` (Electron 44; `BrowserView` está deprecado) + CDP via
+  `webContents.debugger.attach('1.3')`. Tools novas
+  `browser_open/navigate/snapshot/click/type/scroll/screenshot`, registradas no
+  `ToolRegistry` e executadas por RPC de volta ao main. Snapshot para o LLM via
+  `Accessibility.getFullAXTree`.
+
+**Verificação do M3 (MCP + painel):** `scripts/smoke-mcp.cjs` → PASS, exit 0. Sobe um
+**servidor MCP real como subprocesso** (`scripts/fixtures/echo-mcp-server.cjs`, JSON-RPC
+stdio sem dependências), e prova o ciclo completo: o modelo chama
+`mcp__smoke_fixture__echo` e recebe de volta o marcador do próprio fixture
+(`fixture:echo:hello-from-test`), não uma resposta inventada. Também verifica que um
+servidor que falha ao subir é reportado e não afeta o saudável, e que o painel recebeu
+telemetria durante um turno real.
+
+**Achado corrigido no M3:** `DEFAULTS.model` ainda era `ruby-auto`, alias que o provider
+não publica — uma instalação nova (sem `config.json`) começava num modelo que dá 404. Só
+apareceu porque o teste MCP roda com `RUBYCLI_HOME` isolado. Corrigido para `DEFAULT_MODEL`
+(commit `82770a2` no RubyCLI), junto com o override `RUBYCLI_HOME` para o diretório de estado.
 
 ### M4 — Sub-agentes + Orquestração
 

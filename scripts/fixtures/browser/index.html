@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Ruby browser fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #0b090c;
+        color: #f7eff3;
+      }
+      button,
+      input {
+        font: inherit;
+        padding: 8px 12px;
+        margin: 4px 0;
+        border-radius: 6px;
+        border: 1px solid #ffffff33;
+        background: #1a1417;
+        color: #f7eff3;
+      }
+      button {
+        cursor: pointer;
+        background: #de0068;
+        border-color: #de0068;
+      }
+      #result {
+        margin-top: 16px;
+        font-size: 20px;
+        font-weight: 600;
+      }
+      .spacer {
+        height: 1600px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Browser fixture</h1>
+
+    <p>
+      <label for="name">Your name</label><br />
+      <input id="name" type="text" placeholder="type here" />
+    </p>
+
+    <p><button id="greet" type="button">Greet me</button></p>
+
+    <p>
+      <a id="second-page" href="fixture-second.html">Go to the second page</a>
+    </p>
+
+    <p>
+      <button id="deep" type="button" onclick="document.getElementById('deep-marker').textContent = 'deep button reached'">
+        Deep button
+      </button>
+    </p>
+
+    <div id="result"></div>
+
+    <!-- Pushes content below the fold, so scrolling has something to do. -->
+    <div class="spacer"></div>
+
+    <p id="deep-marker">nothing yet</p>
+
+    <script>
+      // A plain DOM listener, not a React-style controlled input: the point is to
+      // prove that CDP's real input events reach an ordinary page.
+      document.getElementById("greet").addEventListener("click", () => {
+        const name = document.getElementById("name").value;
+        document.getElementById("result").textContent = "FIXTURE-GREETING:" + (name || "nobody");
+      });
+    </script>
+  </body>
+</html>

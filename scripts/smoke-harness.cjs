@@ -34,6 +34,14 @@ function runScenario({
   screenshotPath,
   timeoutMs = 180_000,
   env,
+  /**
+   * Show and focus the window.
+   *
+   * Required for anything that dispatches synthetic input (the browser tools):
+   * Chromium drops `Input.dispatch*` events for an unfocused view, and the commands
+   * still report success, so the failure is silent.
+   */
+  showWindow = false,
   hooks = {},
 }) {
   const log = (...args) => console.log(`[${name}]`, ...args);
@@ -147,6 +155,23 @@ function runScenario({
     });
 
     engine.on("message", async (message) => {
+      // Browser RPCs are addressed to the main process, not the renderer. A scenario
+      // that provides a handler gets them; otherwise the engine's browser tools are
+      // simply unavailable, which is the same as a real app with no browser open.
+      if (message.type === "browserRequest") {
+        if (hooks.onBrowserRequest) {
+          await hooks.onBrowserRequest(message, api);
+        } else {
+          engine?.postMessage({
+            type: "browserResult",
+            id: message.id,
+            ok: false,
+            error: "the browser is not available in this test",
+          });
+        }
+        return;
+      }
+
       // Forward to the renderer FIRST. The UI's own state machine is part of what
       // these tests verify, and handling a message before delivering it meant a
       // screenshot could be captured with the stream still marked open.
@@ -278,7 +303,7 @@ function runScenario({
     win = new BrowserWindow({
       width: 1440,
       height: 920,
-      show: Boolean(screenshotPath),
+      show: Boolean(screenshotPath) || showWindow,
       backgroundColor: "#050304",
       webPreferences: {
         preload: path.join(OUT, "preload", "index.js"),
@@ -297,6 +322,12 @@ function runScenario({
 
     await win.loadFile(path.join(OUT, "renderer", "index.html"));
     log("renderer loaded");
+
+    if (showWindow) {
+      win.show();
+      win.focus();
+      log("window shown and focused (required for synthetic input)");
+    }
 
     if (prompt) log(`initial prompt: ${JSON.stringify(prompt)}`);
     startEngine();
