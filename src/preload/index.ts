@@ -14,6 +14,10 @@ import { IPC } from "@shared/ipc";
 const api: RubyDesktopApi = {
   getWorkspace: () => ipcRenderer.invoke(IPC.invoke.getWorkspace),
 
+  pickWorkspace: () => ipcRenderer.invoke(IPC.invoke.pickWorkspace),
+
+  setWorkspace: (path) => ipcRenderer.send(IPC.send.setWorkspace, path),
+
   getEngineInfo: () => ipcRenderer.invoke(IPC.invoke.getEngineInfo),
 
   sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),
@@ -21,6 +25,23 @@ const api: RubyDesktopApi = {
   abort: () => ipcRenderer.send(IPC.send.abort),
 
   setModel: (model) => ipcRenderer.send(IPC.send.setModel, model),
+
+  setPermissionMode: (mode) => ipcRenderer.send(IPC.send.setPermissionMode, mode),
+
+  respondApproval: (id, decision, scope, grantKey) =>
+    ipcRenderer.send(IPC.send.approvalResponse, id, decision, scope, grantKey),
+
+  compact: () => ipcRenderer.send(IPC.send.compact),
+
+  getGoal: () => ipcRenderer.send(IPC.send.getGoal),
+
+  setGoal: (text) => ipcRenderer.send(IPC.send.setGoal, text),
+
+  noteGoal: (text) => ipcRenderer.send(IPC.send.noteGoal, text),
+
+  setGoalStatus: (status) => ipcRenderer.send(IPC.send.setGoalStatus, status),
+
+  clearGoal: () => ipcRenderer.send(IPC.send.clearGoal),
 
   reset: () => ipcRenderer.send(IPC.send.reset),
 

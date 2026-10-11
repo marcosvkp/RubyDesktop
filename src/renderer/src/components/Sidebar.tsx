@@ -1,27 +1,44 @@
-import { FolderClosed, Wrench, Sparkles } from "lucide-react";
+import { FolderClosed, FolderTree, Wrench, Sparkles, ShieldCheck } from "lucide-react";
 import { useStore } from "../store";
 import { shortenPath } from "../lib/utils";
 
 /**
  * Workspace rail.
  *
- * M1 shows the single workspace the engine was started in. The list becomes
- * interactive in M2, which is why the markup is already a list rather than a
- * single label.
+ * The workspace is not a label but the engine's `cwd`: switching it restarts the
+ * engine in the new directory, which is what isolates sessions, permission grants,
+ * goals and path containment from each other.
  */
 export function Sidebar({ workspace }: { workspace: string }): React.JSX.Element {
   const engine = useStore((s) => s.engine);
   const reset = useStore((s) => s.reset);
   const items = useStore((s) => s.items);
+  const pickWorkspace = useStore((s) => s.pickWorkspace);
+  const grants = useStore((s) => s.grants);
+
+  const grantCount = grants.project.length + grants.global.length;
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
-      <div className="px-4 pt-4 pb-2">
+      <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <div className="eyebrow">Workspace</div>
+        <button
+          type="button"
+          onClick={pickWorkspace}
+          title="Open a different folder"
+          className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+        >
+          <FolderTree className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       <div className="px-2">
-        <div className="flex items-start gap-2 rounded-lg bg-sidebar-accent px-3 py-2">
+        <button
+          type="button"
+          onClick={pickWorkspace}
+          title={`${workspace}\n\nClick to switch workspace`}
+          className="flex w-full items-start gap-2 rounded-lg bg-sidebar-accent px-3 py-2 text-left transition-colors hover:bg-white/5"
+        >
           <FolderClosed className="mt-0.5 h-4 w-4 shrink-0 text-sidebar-primary" />
           <div className="min-w-0">
             <div className="truncate font-mono text-xs text-sidebar-accent-foreground">
@@ -33,7 +50,7 @@ export function Sidebar({ workspace }: { workspace: string }): React.JSX.Element
               </div>
             ) : null}
           </div>
-        </div>
+        </button>
       </div>
 
       <div className="flex-1" />
@@ -50,6 +67,15 @@ export function Sidebar({ workspace }: { workspace: string }): React.JSX.Element
             <Sparkles className="h-3.5 w-3.5 text-chart-4" />
             <span>
               <span className="font-mono text-foreground/80">{engine.skillCount}</span> skills
+            </span>
+          </div>
+          <div
+            className="flex items-center gap-2"
+            title={`${grants.project.length} grant(s) for this workspace, ${grants.global.length} global`}
+          >
+            <ShieldCheck className="h-3.5 w-3.5 text-chart-1" />
+            <span>
+              <span className="font-mono text-foreground/80">{grantCount}</span> pre-approved
             </span>
           </div>
           <div className="truncate pt-1 text-[10px]" title={engine.keySource}>

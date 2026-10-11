@@ -3,10 +3,20 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0 concluído (3 commits no RubyCLI) — M1 é o próximo**
+Status: **M0 ✅ · M1 ✅ · M2 ✅ — M3 é o próximo**
 Data: 2026-10-10
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
+
+**Estado verificado no fim do M2**
+- RubyCLI: suíte **1104 passando / 0 falhando** (baseline do Windows zerado), `typecheck`,
+  `lint` e `format:check` limpos. Commits `47cc5e0` e `fd17d52` sobre os 3 do M0.
+- RubyDesktop: `typecheck:node` + `typecheck:web` limpos, build de engine/main/preload/renderer OK.
+- Smoke tests (Electron real, artefatos buildados, provider ao vivo):
+  - `scripts/smoke-main.cjs` → PASS, exit 0.
+  - `scripts/smoke-permissions.cjs` → PASS, exit 0: modal renderiza e permite; o `mkdir`
+    permitido **cria o diretório de fato**; o negado devolve `Blocked:` e **não cria**;
+    banner de goal renderiza; `/compact` completa.
 
 ---
 
@@ -174,9 +184,22 @@ Depois das correções do M0.1: **13 falhas / 1040 passando** — mesmas 13 falh
 | `src/core/agent.e2e.test.ts` | 1 |
 | `src/tools/file/file.test.ts` | 1 |
 
-As falhas visíveis são de **semântica de shell/stdio no Windows** (ex.: `echo error >&2` não popula `stderr` do mesmo jeito; processo em background segurando stdio) e do sandbox `passthrough` — que é justamente o modo usado no Windows.
+**ATUALIZAÇÃO (M2): baseline zerado — 1104 passando, 0 falhando.** As 13 falhas não
+eram "semântica de shell no Windows" a aceitar; eram **três bugs reais de Windows**
+(commit `fd17d52` no RubyCLI):
 
-**Consequência para o M0:** "manter o vitest verde" vira **"não regredir"**. O baseline do Windows já tem 13 falhas; a meta é não adicionar nenhuma, e opcionalmente marcar/quarentenar essas 13 como Windows-específicas.
+1. O tool `bash` dava `spawn("bash")`, que no Windows é o **launcher do WSL**
+   (`System32\bash.exe`), não um shell. Sem distro instalada ele sai com código 1 e
+   escreve o erro onde o tool nunca lê — toda comando voltava
+   `(no output) / Error: Exited with code 1`, indistinguível de "seu comando falhou".
+   Agora resolve um bash de verdade (Git for Windows / MSYS2 / Cygwin), depois
+   PowerShell, depois `cmd.exe`.
+2. Timeouts dependiam de process groups (`process.kill(-pid)`), que o Windows não tem:
+   comando em timeout **nunca era morto de fato**. Agora usa `taskkill /F /T`.
+3. O glob comparava padrão com `/` contra `relative()`, que no Windows devolve `\`.
+   `@src/*.ts` e `**/*.ts` não casavam com **nada**, e `*.ts` casava demais.
+
+**Consequência:** "não regredir" deixou de ser o critério; a suíte é gate de verdade.
 
 ---
 
@@ -383,14 +406,30 @@ Duas trilhas em paralelo: **Core** (repo `rubycli`) e **Desktop** (repo `RubyDes
 
 ### M2 — Workspaces, Goal, Compact, Permissões
 
-**Core:** estender `goal.ts` com `maxRounds`, `round` e status `blocked`; expor hooks de compact.
+**Core:** ✅ separar a política de permissão (`src/core/permissions.ts`) da renderização
+no terminal (`src/cli/confirm.ts`) e publicá-la no `src/lib.ts`; a política pura
+(`decideConfirmation`, `decideAutoApprove`, `matchesNeverAutoApprove`,
+`buildPermissionSources`, `grantKeysFor`) é o que o Desktop usa.
 
-**Desktop**
-- Workspace switcher + sessões isoladas + persistência (JSON, sem nativos).
-- **Modal de permissão** substituindo o prompt clack (allow once / always / deny) via `ipcMain.handle`.
-- Goal: banner persistente, notas, auto-continuação com `maxRounds`, `/goal` `/auto`.
-- Compact: `/compact`, medidor de contexto ao vivo, auto em 75%.
-- **Entregável:** fluxo agêntico completo com HITL.
+**Desktop** — ✅ CONCLUÍDO
+- Workspace switcher: trocar de workspace **reinicia o engine com o novo `cwd`**, que é
+  o que isola sessão, grants, goal e contenção de path. Sem estado compartilhado para
+  vazar, porque o processo que o guarda é substituído.
+- **Modal de permissão** ([`ApprovalModal.tsx`](src/renderer/src/components/ApprovalModal.tsx))
+  substituindo o prompt clack: allow once / allow this call always / always allow tool /
+  always allow everywhere / deny. Escape = deny. O engine bloqueia a tool call até a
+  resposta e tem timeout de 10 min (um GUI nunca pode pendurar um turno).
+- Goal: banner persistente ([`GoalBanner.tsx`](src/renderer/src/components/GoalBanner.tsx)),
+  notas, `/goal`, pause/resume/complete/clear. Estado por workspace em `~/.rubycli/goals/`.
+- Compact: `/compact`, botão na status bar, medidor de contexto ao vivo, auto em 75%.
+- Modo de permissão na status bar (`Ask` / `Accept edits` / `Plan`) — é um *modo*, então
+  fica sempre visível em vez de escondido num diálogo.
+- **Entregável:** ✅ fluxo agêntico completo com HITL, verificado ponta-a-ponta.
+
+**Achado crítico corrigido no M2:** o M1 nunca ligou o `confirmFn`, então o
+`executor` negava silenciosamente toda tool que exigia confirmação
+(`deps.confirmFn ? ... : "deny"`), sem prompt e sem aviso. Um `Blocked:` aparecia
+como falha de tool, não como decisão. Era um bug de segurança nas duas direções.
 
 ### M3 — MCP + Terminal + Browser
 

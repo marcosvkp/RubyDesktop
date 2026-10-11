@@ -6,11 +6,19 @@
  * engine goes through the `EngineRequest` protocol, so there is exactly one path
  * to the agent and the renderer cannot reach it any other way.
  */
-import { app, BrowserWindow, ipcMain, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "electron";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import type { EngineRequest, EngineResponse } from "@shared/ipc";
+import type {
+  ApprovalDecision,
+  ApprovalScope,
+  EngineRequest,
+  EngineResponse,
+  GrantKeyKind,
+  GoalStatus,
+  PermissionMode,
+} from "@shared/ipc";
 import { IPC } from "@shared/ipc";
 
 /**
@@ -104,6 +112,37 @@ function post(request: EngineRequest): void {
   engine?.postMessage(request);
 }
 
+/**
+ * Tears the engine down so it can be started again in a different directory.
+ *
+ * The `exit` handler is detached first: it reports an unexpected stop to the UI,
+ * and a deliberate restart is not that.
+ */
+function stopEngine(): void {
+  if (!engine) return;
+  const current = engine;
+  engine = null;
+  lastReady = undefined;
+  current.removeAllListeners("exit");
+  current.kill();
+}
+
+/**
+ * Points the engine at a new workspace and restarts it.
+ *
+ * Isolation is structural rather than bookkeeping: the engine's `cwd` *is* the
+ * workspace, so path containment, the project-scoped permission grants, the goal
+ * file and the session all key off it. There is no shared state to leak between
+ * workspaces because the process that holds it is replaced.
+ */
+function switchWorkspace(next: string): void {
+  if (!existsSync(next) || next === workspace) return;
+  stopEngine();
+  workspace = next;
+  sendToRenderer({ type: "status", status: "starting" });
+  startEngine();
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -149,11 +188,49 @@ function createWindow(): void {
 
 ipcMain.handle(IPC.invoke.getWorkspace, () => workspace);
 
+ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
+  const options: Electron.OpenDialogOptions = {
+    title: "Choose a workspace",
+    defaultPath: workspace,
+    properties: ["openDirectory", "createDirectory"],
+  };
+  // The window overload is preferred (it makes the dialog modal to the app), but
+  // it is only available once a window exists.
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  return result.canceled ? undefined : result.filePaths[0];
+});
+
 ipcMain.handle(IPC.invoke.getEngineInfo, () => lastReady);
 
 ipcMain.on(IPC.send.prompt, (_event, text: string) => post({ type: "prompt", text }));
 ipcMain.on(IPC.send.abort, () => post({ type: "abort" }));
+ipcMain.on(IPC.send.setWorkspace, (_event, path: string) => switchWorkspace(path));
 ipcMain.on(IPC.send.setModel, (_event, model: string) => post({ type: "setModel", model }));
+ipcMain.on(IPC.send.setPermissionMode, (_event, mode: PermissionMode) =>
+  post({ type: "setPermissionMode", mode }),
+);
+ipcMain.on(
+  IPC.send.approvalResponse,
+  (
+    _event,
+    id: string,
+    decision: ApprovalDecision,
+    scope: ApprovalScope,
+    grantKey?: GrantKeyKind,
+  ) => post({ type: "approvalResponse", id, decision, scope, grantKey }),
+);
+ipcMain.on(IPC.send.compact, () => post({ type: "compact" }));
+ipcMain.on(IPC.send.getGoal, () => post({ type: "goal", action: "get" }));
+ipcMain.on(IPC.send.setGoal, (_event, text: string) => post({ type: "goal", action: "set", text }));
+ipcMain.on(IPC.send.noteGoal, (_event, text: string) =>
+  post({ type: "goal", action: "note", text }),
+);
+ipcMain.on(IPC.send.setGoalStatus, (_event, status: GoalStatus) =>
+  post({ type: "goal", action: "status", status }),
+);
+ipcMain.on(IPC.send.clearGoal, () => post({ type: "goal", action: "clear" }));
 ipcMain.on(IPC.send.reset, () => post({ type: "reset" }));
 ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 
@@ -174,6 +251,5 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  engine?.kill();
-  engine = null;
+  stopEngine();
 });

@@ -4,6 +4,8 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { Composer } from "./components/Composer";
 import { StatusBar } from "./components/StatusBar";
+import { GoalBanner } from "./components/GoalBanner";
+import { ApprovalModal } from "./components/ApprovalModal";
 import { useStore } from "./store";
 
 export function App(): React.JSX.Element {
@@ -28,11 +30,14 @@ export function App(): React.JSX.Element {
         <Sidebar workspace={workspace} />
         <main className="flex min-w-0 flex-1 flex-col bg-page">
           {fatal ? <FatalBanner message={fatal} onDismiss={dismissFatal} /> : null}
+          <GoalBanner />
           <ChatView />
           <Composer />
         </main>
       </div>
       <StatusBar />
+      {/* Last in the tree so it paints above everything and captures the keyboard. */}
+      <ApprovalModal />
     </div>
   );
 }
