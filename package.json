@@ -16,7 +16,9 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web"
   },
   "dependencies": {
-    "@rubyclii/cli": "file:../RubyCLI"
+    "@rubyclii/cli": "file:../RubyCLI",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@swc/core": "^1.16.13",

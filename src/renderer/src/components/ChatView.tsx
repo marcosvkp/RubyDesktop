@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { AlertTriangle, Info } from "lucide-react";
 import { useStore, type ChatItem } from "../store";
 import { ToolCallCard } from "./ToolCallCard";
+import { Markdown } from "./Markdown";
 import { cn } from "../lib/utils";
 
 export function ChatView(): React.JSX.Element {
@@ -40,9 +41,8 @@ function Item({ item }: { item: ChatItem }): React.JSX.Element {
 
     case "assistant":
       return (
-        <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
-          {item.text}
-          {item.streaming ? <Caret /> : null}
+        <div className="text-sm text-foreground">
+          <Markdown text={item.text} streaming={item.streaming} />
         </div>
       );
 
@@ -68,11 +68,6 @@ function Item({ item }: { item: ChatItem }): React.JSX.Element {
         </div>
       );
   }
-}
-
-/** Blinking block cursor shown while a message is still streaming. */
-function Caret(): React.JSX.Element {
-  return <span className="ml-0.5 inline-block h-4 w-2 translate-y-0.5 animate-pulse bg-primary" />;
 }
 
 function EmptyState({ status }: { status: string }): React.JSX.Element {
