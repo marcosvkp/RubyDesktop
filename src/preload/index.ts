@@ -20,7 +20,11 @@ const api: RubyDesktopApi = {
 
   getEngineInfo: () => ipcRenderer.invoke(IPC.invoke.getEngineInfo),
 
+  saveApiKey: (key) => ipcRenderer.invoke(IPC.invoke.saveApiKey, key),
+
   sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),
+
+  activateSkill: (name, args) => ipcRenderer.send(IPC.send.activateSkill, name, args),
 
   abort: () => ipcRenderer.send(IPC.send.abort),
 
@@ -31,7 +35,20 @@ const api: RubyDesktopApi = {
   respondApproval: (id, decision, scope, grantKey) =>
     ipcRenderer.send(IPC.send.approvalResponse, id, decision, scope, grantKey),
 
+  respondUserQuestion: (id, answers) =>
+    ipcRenderer.send(IPC.send.userQuestionResponse, id, answers),
+
+  respondSubAgentConfig: (id, action, config) =>
+    ipcRenderer.send(IPC.send.subAgentConfigResponse, id, action, config),
+
+  respondSubAgentReview: (id, action) =>
+    ipcRenderer.send(IPC.send.subAgentReviewResponse, id, action),
+
   compact: () => ipcRenderer.send(IPC.send.compact),
+
+  newSession: () => ipcRenderer.send(IPC.send.newSession),
+
+  resumeSession: (sessionId) => ipcRenderer.send(IPC.send.resumeSession, sessionId),
 
   getGoal: () => ipcRenderer.send(IPC.send.getGoal),
 

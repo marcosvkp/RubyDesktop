@@ -6,9 +6,11 @@
  * engine goes through the `EngineRequest` protocol, so there is exactly one path
  * to the agent and the renderer cannot reach it any other way.
  */
-import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, utilityProcess } from "electron";
+import { autoUpdater } from "electron-updater";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { BrowserController } from "./browser.js";
 import { createBrowserService } from "./browser-service.js";
@@ -23,6 +25,8 @@ import type {
   PermissionMode,
 } from "@shared/ipc";
 import { IPC } from "@shared/ipc";
+
+declare const __RUBY_DESKTOP_MAC_AUTO_UPDATES__: boolean;
 
 /**
  * The workspace the engine operates in.
@@ -43,9 +47,47 @@ function resolveWorkspace(): string {
 
 let workspace = "";
 
-/** Path to the built engine host. `__dirname` is `out/main` at runtime. */
+/** The engine is a normal file in the install; dev builds keep it beside `out/main`. */
 function engineEntry(): string {
+  if (app.isPackaged) return join(process.resourcesPath, "engine", "index.mjs");
   return join(__dirname, "..", "engine", "index.mjs");
+}
+
+/** Enables updates only for builds that contain a generated GitHub feed config. */
+function startAutoUpdates(): void {
+  if (!app.isPackaged || !existsSync(join(process.resourcesPath, "app-update.yml"))) return;
+  if (process.platform === "darwin" && !__RUBY_DESKTOP_MAC_AUTO_UPDATES__) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("error", (error) => {
+    console.error(`[updates] ${error.message}`);
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    const options = {
+      type: "info" as const,
+      title: "Ruby Desktop atualizado",
+      message: `A versão ${info.version} foi baixada e está pronta para instalar.`,
+      detail: "Escolha Reiniciar agora para aplicar já, ou Depois para instalar ao encerrar o app.",
+      buttons: ["Reiniciar agora", "Depois"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const prompt = mainWindow && !mainWindow.isDestroyed()
+      ? dialog.showMessageBox(mainWindow, options)
+      : dialog.showMessageBox(options);
+    void prompt.then(({ response }) => {
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+  });
+
+  // A brief delay lets the first window settle before the updater contacts GitHub.
+  setTimeout(() => {
+    void autoUpdater.checkForUpdates().catch((error: unknown) => {
+      console.error(`[updates] ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, 15_000);
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -56,6 +98,20 @@ let engine: Electron.UtilityProcess | null = null;
  * return undefined on every reload and the UI would never learn the model.
  */
 let lastReady: Extract<EngineResponse, { type: "ready" }> | undefined;
+let engineBusy = false;
+
+function apiKeyPath(): string {
+  return join(app.getPath("userData"), "ruby-api-key.enc");
+}
+
+async function readSavedApiKey(): Promise<string | undefined> {
+  if (!safeStorage.isEncryptionAvailable()) return undefined;
+  try {
+    return safeStorage.decryptString(await readFile(apiKeyPath()));
+  } catch {
+    return undefined;
+  }
+}
 
 function sendToRenderer(message: EngineResponse): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -70,7 +126,7 @@ function sendToRenderer(message: EngineResponse): void {
  * whether a write stays inside the project, so the engine must actually run *in*
  * the workspace rather than being told about it.
  */
-function startEngine(): void {
+async function startEngine(): Promise<void> {
   if (engine) return;
 
   const entry = engineEntry();
@@ -82,14 +138,27 @@ function startEngine(): void {
     return;
   }
 
+  const env = { ...process.env } as Record<string, string>;
+  const savedApiKey = await readSavedApiKey();
+  if (savedApiKey) {
+    // A key saved by the desktop takes precedence over inherited environment
+    // variables, while legacy environment/config sources remain available.
+    env.RUBY_API_KEY = savedApiKey;
+    env.RUBY_DESKTOP_KEY_SOURCE = "safeStorage";
+  } else {
+    delete env.RUBY_DESKTOP_KEY_SOURCE;
+  }
+
   engine = utilityProcess.fork(entry, [], {
     cwd: workspace,
     stdio: "pipe",
     serviceName: "ruby-engine",
+    env,
   });
 
   engine.on("message", (message: EngineResponse) => {
     if (message.type === "ready") lastReady = message;
+    if (message.type === "status") engineBusy = message.status === "busy";
     // Browser RPCs are handled here rather than relayed: they are addressed to the
     // main process, and the renderer has no business performing them.
     if (message.type === "browserRequest") {
@@ -108,6 +177,7 @@ function startEngine(): void {
 
   engine.on("exit", (code: number) => {
     engine = null;
+    engineBusy = false;
     sendToRenderer({
       type: "fatal",
       message: `The agent engine stopped unexpectedly (exit code ${code}).`,
@@ -132,6 +202,7 @@ function stopEngine(): void {
   const current = engine;
   engine = null;
   lastReady = undefined;
+  engineBusy = false;
   current.removeAllListeners("exit");
   // Give the engine a moment to close its MCP child processes; killing it outright
   // can orphan them on Windows, where nothing reaps a detached grandchild. The
@@ -191,7 +262,7 @@ function switchWorkspace(next: string): void {
   stopEngine();
   workspace = next;
   sendToRenderer({ type: "status", status: "starting" });
-  startEngine();
+  void startEngine();
 }
 
 function createWindow(): void {
@@ -259,8 +330,37 @@ ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
 });
 
 ipcMain.handle(IPC.invoke.getEngineInfo, () => lastReady);
+ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
+  if (engineBusy) {
+    return { ok: false, error: "Pare o turno atual antes de trocar a chave." };
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    return { ok: false, error: "O cofre seguro do sistema não está disponível nesta sessão." };
+  }
+  const trimmed = typeof key === "string" ? key.trim() : "";
+  if (!trimmed) return { ok: false, error: "Informe uma chave de API válida." };
+
+  const target = apiKeyPath();
+  const temporary = `${target}.tmp`;
+  try {
+    await writeFile(temporary, safeStorage.encryptString(trimmed), { mode: 0o600 });
+    await rename(temporary, target);
+    stopEngine();
+    await startEngine();
+    return { ok: true };
+  } catch (err) {
+    await rm(temporary, { force: true }).catch(() => {});
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Não foi possível salvar a chave.",
+    };
+  }
+});
 
 ipcMain.on(IPC.send.prompt, (_event, text: string) => post({ type: "prompt", text }));
+ipcMain.on(IPC.send.activateSkill, (_event, name: string, args: string) =>
+  post({ type: "activateSkill", name, args }),
+);
 ipcMain.on(IPC.send.abort, () => post({ type: "abort" }));
 ipcMain.on(IPC.send.setWorkspace, (_event, path: string) => switchWorkspace(path));
 ipcMain.on(IPC.send.setModel, (_event, model: string) => post({ type: "setModel", model }));
@@ -277,7 +377,25 @@ ipcMain.on(
     grantKey?: GrantKeyKind,
   ) => post({ type: "approvalResponse", id, decision, scope, grantKey }),
 );
+ipcMain.on(IPC.send.userQuestionResponse, (_event, id: string, answers: Record<string, string> | null) =>
+  post({ type: "userQuestionResponse", id, answers }),
+);
+ipcMain.on(
+  IPC.send.subAgentConfigResponse,
+  (_event, id: string, action: "start" | "cancel", config?: {
+    model: string;
+    reasoningEffort?: import("@shared/ipc").ReasoningEffort;
+    instructions: string;
+  }) => post({ type: "subAgentConfigResponse", id, action, ...config }),
+);
+ipcMain.on(IPC.send.subAgentReviewResponse, (_event, id: string, action: "merge" | "discard" | "cancel") =>
+  post({ type: "subAgentReviewResponse", id, action }),
+);
 ipcMain.on(IPC.send.compact, () => post({ type: "compact" }));
+ipcMain.on(IPC.send.newSession, () => post({ type: "session", action: "new" }));
+ipcMain.on(IPC.send.resumeSession, (_event, sessionId: string) =>
+  post({ type: "session", action: "resume", sessionId }),
+);
 ipcMain.on(IPC.send.getGoal, () => post({ type: "goal", action: "get" }));
 ipcMain.on(IPC.send.setGoal, (_event, text: string) => post({ type: "goal", action: "set", text }));
 ipcMain.on(IPC.send.noteGoal, (_event, text: string) =>
@@ -335,7 +453,8 @@ ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 void app.whenReady().then(() => {
   workspace = resolveWorkspace();
   createWindow();
-  startEngine();
+  void startEngine();
+  startAutoUpdates();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

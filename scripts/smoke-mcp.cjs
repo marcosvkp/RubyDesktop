@@ -116,9 +116,9 @@ runScenario({
           return api.finish(1, `unexpected approval request for '${message.request.toolName}'`);
         }
         await new Promise((r) => setTimeout(r, 300));
-        const clicked = await api.clickButton("Allow once");
+        const clicked = await api.clickButton("Permitir uma vez");
         api.log(`approved MCP tool call via the modal: ${clicked}`);
-        if (clicked !== "Allow once") return api.finish(1, "could not approve the MCP tool call");
+        if (clicked !== "Permitir uma vez") return api.finish(1, "could not approve the MCP tool call");
         return;
       }
 

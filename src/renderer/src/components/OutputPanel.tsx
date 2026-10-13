@@ -30,9 +30,9 @@ export function OutputPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
   return (
     <div className="flex h-56 shrink-0 flex-col border-t border-line bg-background">
       <header className="flex items-center gap-2 px-4 py-1.5">
-        <span className="eyebrow">Output</span>
+        <span className="eyebrow">Atividade do agente</span>
         <span className="font-mono text-[10px] text-muted-foreground">
-          {metrics.length} event{metrics.length === 1 ? "" : "s"}
+          {metrics.length} {metrics.length === 1 ? "evento" : "eventos"}
         </span>
         {busy ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-chart-3" /> : null}
         <span className="flex-1" />
@@ -41,7 +41,7 @@ export function OutputPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
           onClick={onClose}
           className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
-          Hide
+          Ocultar
         </button>
       </header>
 
@@ -55,7 +55,7 @@ export function OutputPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
       >
         {metrics.length === 0 ? (
           <p className="text-muted-foreground">
-            Nothing yet. Model and tool activity appears here as the agent works.
+            Ainda sem atividade. As chamadas do modelo e das ferramentas aparecerão aqui.
           </p>
         ) : (
           metrics.map((line, index) => <MetricRow key={index} line={line} />)
@@ -72,13 +72,13 @@ function MetricRow({ line }: { line: MetricLine }): React.JSX.Element {
       const ttft =
         line.firstTokenLatencyMs === undefined
           ? "—"
-          : `${formatMs(line.firstTokenLatencyMs)} first token`;
+          : `${formatMs(line.firstTokenLatencyMs)} primeiro token`;
       return (
         <div className="flex gap-3 whitespace-pre">
-          <Tag className="text-chart-4">model</Tag>
+          <Tag className="text-chart-4">modelo</Tag>
           <span className="text-foreground/80">{line.model}</span>
           <span className="text-muted-foreground">
-            {formatTokens(line.inputTokens)} in · {formatTokens(line.outputTokens)} out ·{" "}
+            {formatTokens(line.inputTokens)} entrada · {formatTokens(line.outputTokens)} saída ·{" "}
             {formatMs(line.latencyMs)} · {ttft}
           </span>
         </div>
@@ -89,7 +89,7 @@ function MetricRow({ line }: { line: MetricLine }): React.JSX.Element {
       return (
         <div className="flex gap-3 whitespace-pre">
           <Tag className={line.success ? "text-chart-5" : "text-destructive"}>
-            {line.success ? "tool " : "fail "}
+            {line.success ? "ferramenta " : "falha "}
           </Tag>
           <span className="text-foreground/80">{line.name}</span>
           <span className="text-muted-foreground">
@@ -101,7 +101,7 @@ function MetricRow({ line }: { line: MetricLine }): React.JSX.Element {
     case "denied":
       return (
         <div className="flex gap-3 whitespace-pre">
-          <Tag className="text-chart-3">deny</Tag>
+          <Tag className="text-chart-3">negado</Tag>
           <span className="text-foreground/80">{line.name}</span>
           <span className="text-muted-foreground">{line.reason}</span>
         </div>
@@ -110,7 +110,7 @@ function MetricRow({ line }: { line: MetricLine }): React.JSX.Element {
     case "guard":
       return (
         <div className="flex gap-3 whitespace-pre">
-          <Tag className="text-destructive">stop</Tag>
+          <Tag className="text-destructive">interrompido</Tag>
           <span className="text-foreground/80">{line.guard}</span>
           <span className="text-muted-foreground">{line.reason}</span>
         </div>
@@ -119,7 +119,7 @@ function MetricRow({ line }: { line: MetricLine }): React.JSX.Element {
     case "compact":
       return (
         <div className="flex gap-3 whitespace-pre">
-          <Tag className="text-chart-1">ctx </Tag>
+          <Tag className="text-chart-1">contexto </Tag>
           <span className="text-foreground/80">{line.trigger}</span>
           <span className="text-muted-foreground">{line.detail}</span>
         </div>

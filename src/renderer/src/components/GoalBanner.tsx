@@ -25,7 +25,7 @@ export function GoalBanner(): React.JSX.Element | null {
         : "border-line bg-muted/40";
 
   const label =
-    goal.status === "active" ? "Goal" : goal.status === "paused" ? "Goal · paused" : "Goal · done";
+    goal.status === "active" ? "Meta" : goal.status === "paused" ? "Meta · pausada" : "Meta · concluída";
 
   return (
     <div
@@ -50,30 +50,30 @@ export function GoalBanner(): React.JSX.Element | null {
             type="button"
             onClick={() =>
               pushNotice(
-                [`Notes for "${goal.text}":`, ...goal.notes.map((n, i) => `${i + 1}. ${n}`)].join(
+                [`Notas de "${goal.text}":`, ...goal.notes.map((n, i) => `${i + 1}. ${n}`)].join(
                   "\n",
                 ),
               )
             }
             className="mt-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           >
-            {goal.notes.length} note{goal.notes.length === 1 ? "" : "s"}
+            {goal.notes.length} {goal.notes.length === 1 ? "nota" : "notas"}
           </button>
         ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
         {goal.status === "active" ? (
-          <BannerButton onClick={() => setGoalStatus("paused")}>Pause</BannerButton>
+          <BannerButton onClick={() => setGoalStatus("paused")}>Pausar</BannerButton>
         ) : null}
         {goal.status === "paused" ? (
-          <BannerButton onClick={() => setGoalStatus("active")}>Resume</BannerButton>
+          <BannerButton onClick={() => setGoalStatus("active")}>Retomar</BannerButton>
         ) : null}
         {goal.status !== "complete" ? (
-          <BannerButton onClick={() => setGoalStatus("complete")}>Complete</BannerButton>
+          <BannerButton onClick={() => setGoalStatus("complete")}>Concluir</BannerButton>
         ) : null}
-        <BannerButton onClick={clearGoal} title="Delete this goal">
-          Clear
+        <BannerButton onClick={clearGoal} title="Apagar esta meta">
+          Apagar
         </BannerButton>
       </div>
     </div>

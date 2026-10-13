@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: RubyDesktop
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.RUBYCLI_REPOSITORY || 'marcosvkp/rubycli' }}
+          ref: ${{ vars.RUBYCLI_REF || 'main' }}
+          path: RubyCLI
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            RubyDesktop/package-lock.json
+            RubyCLI/package-lock.json
+
+      - name: Install and build RubyCLI
+        working-directory: ${{ github.workspace }}/RubyCLI
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check RubyCLI
+        working-directory: ${{ github.workspace }}/RubyCLI
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npx vitest run --exclude src/eval/matrix.test.ts
+
+      - name: Install and build Desktop
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        env:
+          RUBY_DESKTOP_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package Windows directory
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: npm run package:dir
+
+      - name: Verify packaged application
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: |
+          node scripts/verify-package.cjs release/win-unpacked
+          node scripts/verify-package.cjs release/win-arm64-unpacked

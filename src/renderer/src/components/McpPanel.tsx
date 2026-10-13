@@ -29,12 +29,12 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
     >
       <header className="flex items-center gap-2 border-b border-sidebar-border px-4 py-3">
         <Plug className="h-3.5 w-3.5 text-chart-1" />
-        <span className="eyebrow">MCP servers</span>
+        <span className="eyebrow">Servidores MCP</span>
         <span className="flex-1" />
         <button
           type="button"
           onClick={refresh}
-          title="Reconnect every server"
+          title="Reconectar servidores"
           className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
           <RefreshCw className="h-3.5 w-3.5" />
@@ -42,7 +42,7 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
         <button
           type="button"
           onClick={onClose}
-          title="Close"
+          title="Fechar"
           className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
@@ -65,7 +65,7 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
 
         {servers.length === 0 && !adding ? (
           <p className="px-1 py-2 text-xs text-muted-foreground">
-            No MCP servers configured. Add one to give the agent extra tools.
+            Nenhum servidor MCP configurado. Adicione um para incluir ferramentas ao agente.
           </p>
         ) : null}
 
@@ -88,7 +88,7 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
                 <button
                   type="button"
                   onClick={() => remove(server.name)}
-                  title="Remove this server"
+                  title="Remover servidor"
                   className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-destructive"
                 >
                   <Trash2 className="h-3 w-3" />
@@ -112,7 +112,7 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
                   ))}
                 </ul>
               ) : server.connected && !server.error ? (
-                <p className="mt-1 text-[11px] text-muted-foreground">connected, no tools</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">conectado, sem ferramentas</p>
               ) : null}
             </div>
           ))}
@@ -130,7 +130,7 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
             className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add server
+            Adicionar servidor
           </button>
         </div>
       ) : null}
@@ -181,7 +181,7 @@ function AddServerForm({
   return (
     <div className="mb-3 rounded-lg border border-line bg-card p-3">
       <div className="mb-2 flex items-center gap-2">
-        <span className="eyebrow">New server</span>
+        <span className="eyebrow">Novo servidor</span>
         <span className="flex-1" />
         <button
           type="button"
@@ -192,7 +192,7 @@ function AddServerForm({
         </button>
       </div>
 
-      <Field label="Name">
+      <Field label="Nome">
         <input
           value={name}
           onChange={(e) => edit(setName)(e.target.value)}
@@ -201,7 +201,7 @@ function AddServerForm({
         />
       </Field>
 
-      <Field label="Transport">
+      <Field label="Transporte">
         <div className="flex gap-1">
           {(["stdio", "http"] as const).map((t) => (
             <button
@@ -223,7 +223,7 @@ function AddServerForm({
 
       {transport === "stdio" ? (
         <>
-          <Field label="Command">
+          <Field label="Comando">
             <input
               value={command}
               onChange={(e) => edit(setCommand)(e.target.value)}
@@ -231,7 +231,7 @@ function AddServerForm({
               className="w-full rounded border border-line bg-page px-2 py-1 font-mono text-xs text-foreground outline-none focus:border-ring"
             />
           </Field>
-          <Field label="Arguments">
+          <Field label="Argumentos">
             <input
               value={args}
               onChange={(e) => edit(setArgs)(e.target.value)}
@@ -261,8 +261,8 @@ function AddServerForm({
           )}
         >
           {test.connected
-            ? `Connected — ${test.tools.length} tool${test.tools.length === 1 ? "" : "s"} available.`
-            : `Failed: ${test.error}`}
+            ? `Conectado — ${test.tools.length} ${test.tools.length === 1 ? "ferramenta disponível" : "ferramentas disponíveis"}.`
+            : `Falha: ${test.error}`}
         </div>
       ) : null}
 
@@ -273,7 +273,7 @@ function AddServerForm({
           onClick={() => onSave(name.trim(), draft())}
           className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
         >
-          Save
+          Salvar
         </button>
         <button
           type="button"
@@ -281,13 +281,13 @@ function AddServerForm({
           onClick={() => onTest(name.trim(), draft())}
           className="rounded-md border border-line px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-white/5 disabled:opacity-40"
         >
-          Test connection
+          Testar conexão
         </button>
       </div>
 
       <p className="mt-2 text-[10px] text-muted-foreground">
-        Saved to ~/.rubycli/mcp.json. Testing connects without saving, so a server can be
-        tried before it joins the agent&apos;s tools.
+        Salvo em ~/.rubycli/mcp.json. O teste conecta sem salvar, para verificar o servidor
+        antes de incluir as ferramentas no agente.
       </p>
     </div>
   );

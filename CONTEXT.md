@@ -6,81 +6,164 @@
 > Para o *porquê* das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
-**Estado:** M0, M1, M2, M3 concluídos e verificados. **M4 e M5 não começaram.**
-Ambos os repos limpos. RubyCLI com **1129 testes passando / 0 falhando**.
+**Estado:** M0–M5 implementados neste checkout; a primeira release ainda não foi publicada. RubyCLI:
+**1133 testes determinísticos passaram**; a matriz live de OpenAI não passou neste ambiente. O
+Desktop build/typecheck e o empacotamento Windows passaram. O Electron encerra com
+`STATUS_BREAKPOINT` antes de iniciar o smoke harness, então a UI empacotada e o runtime MCP ainda
+precisam de validação em uma máquina que consiga abrir o Electron.
+
+### Etapa entregue — M3.5 UX
+
+- `task` agora executa um explorer read-only no Desktop; não cria workers nem worktrees.
+- Conversas persistem em sessões do engine; a última é restaurada ao abrir, com lista de recentes,
+  nova conversa e retomada pela sidebar.
+- A UI de configurações salva a chave com `safeStorage` do Electron e reinicia o engine; env e
+  configuração antiga do CLI continuam como fallback.
+- Chat preserva a posição de rolagem e oferece atalho para o fim; blocos de código têm cópia e
+  realce lexical leve para linguagens comuns.
+- Sidebar e controles foram reorganizados, com rótulos em português e diagnósticos recolhidos.
+- Verificação feita em artefatos buildados: `npm run build` e os cinco `smoke-*.cjs` passaram.
+
+### Última etapa entregue — M3.6 métricas no chat
+
+- Seletor de modelo saiu da barra global e foi para o composer; abre uma lista pesquisável com
+  contexto e capacidades, e fica indisponível durante um turno ativo.
+- Turnos, etapas de ferramenta, tokens, cache e uso da janela aparecem como chips clicáveis com
+  popovers explicativos. Também exibem tempo LLM/tool, TTFT e velocidade de geração quando há dados.
+- `cachedTokens` já exposto pelo engine agora atravessa o contrato IPC e entra nos totais.
+- Os totais de token/cache começam na execução atual. Sessões restauradas preservam conversa e
+  turnos/etapas, mas métricas antigas não são persistidas. A janela usa a estimativa de mensagens
+  disponível no engine; system prompt e ferramentas não são separados.
+- `smoke-markdown.cjs` verifica os quatro popovers e o seletor de modelo; build e smoke suite
+  completos passaram.
+
+### Nova etapa entregue — M3.7 autocomplete de comandos e criação de Skills
+
+- O composer sugere comandos locais e Skills descobertas enquanto o usuário digita `/`;
+  setas navegam, Tab completa, Enter seleciona ou executa e Escape fecha a lista.
+- A lista vem do catálogo do engine e se atualiza após cada turno, incluindo Skills criadas na
+  conversa.
+- `/new-skill` ativa diretamente a Skill builtin do engine. Ela entrevista o usuário, apresenta o
+  rascunho e grava a Skill do projeto com a confirmação normal da ferramenta `write`.
+- O contrato IPC e o smoke harness foram atualizados para encaminhar a ativação explícita.
+- `npm run typecheck` e `npm run build` passaram nesta etapa.
+- Os cinco smoke scripts terminaram em PASS. `smoke-permissions` passou em workspace temporário
+  isolado após uma primeira execução no workspace compartilhado responder sem chamar ferramenta.
+- Uma checagem no renderer buildado confirmou sugestões para `/new-skill` e `/goal`.
+
+### M4.1–M4.3 — Subagentes, perguntas e revisão de workers ✅
+
+- `task` aceita papel, modelo do catálogo, reasoning effort, título e instruções por agente. Antes
+  de cada lançamento, o usuário pode iniciar com a configuração proposta pela IA ou abrir o formulário
+  para editar modelo, effort e instruções. Alternativas ficam identificadas antes de iniciar.
+- `ask_user` emite perguntas estruturadas com opções e resposta livre. O cartão identifica o agente;
+  resposta, cancelamento, abort, reset e shutdown resolvem as esperas.
+- Explorers ficam read-only. Workers recebem worktrees Git próprios, criados de um snapshot que
+  inclui alterações locais não commitadas sem mexer no índice do usuário. Concorrência limitada a
+  três; cancelamento descarta o worktree.
+- Cada worker mostra progresso, modelo, effort, orientações e tokens/tools. O diff só é aplicado após
+  aprovação explícita; conflito mantém o cartão em revisão. Descarte e falha limpam branch/worktree.
+- Ferramentas de arquivo são limitadas à raiz do worker e mantêm o predicado original de aprovação;
+  cada operação no worktree pode pedir confirmação. Toda chamada de shell do worker também exige
+  aprovação, pois um comando pode referenciar caminhos absolutos fora do diretório atual.
+- Verificação: Desktop `npm run build` passou; RubyCLI typecheck/lint/format e 80 arquivos de teste
+  (1133 testes) passaram; o ciclo de worktree foi verificado em um repositório Git temporário. A
+  matriz live teve 21 falhas externas e o Electron encerrou com `STATUS_BREAKPOINT` antes dos smoke
+  tests, portanto não houve aprovação de UI em Electron.
+- A DSL `workflow` com `parallel()`/`pipeline()` continua pendente e deve ser planejada como etapa
+  própria depois do fluxo básico de subagentes.
 
 ---
 
-## 1. Marcos que faltam
+## 1. Marcos entregues e próximos passos
 
-### M4 — Sub-agentes + orquestração
+### M4 — Sub-agentes + orquestração ✅ (workflow DSL pendente)
 
-**Core (RubyCLI)**
-- Subagente com **git worktree isolado** (decisão já tomada): cada worker ganha seu próprio
-  worktree, escreve sem contenção, e o resultado é mesclado no fim. Requer criar/limpar
-  worktree, branch por subagente, **política de merge** (em aberto, ver §4) e rollback em falha.
-- Papéis: `explorer` (read-only, como o `task` de hoje) vs `worker` (worktree + escrita).
-- Paralelismo com **limite de concorrência** configurável.
+**M4.1 — Configuração e perguntas no chat ✅**
+- Catálogo de modelos e reasoning efforts compatíveis alimentam a configuração inline; modelos ou
+  efforts indisponíveis geram uma alternativa identificada, sem troca silenciosa.
+- O usuário pode pedir papéis, modelos, efforts e orientações em linguagem natural. O orquestrador
+  propõe a divisão e, para cada agente, o usuário escolhe iniciar com a recomendação ou revisar e
+  editar os parâmetros.
+- Cada subagente recebe instruções próprias de papel, contexto, limites, ferramentas e formato de
+  saída, formando um harness por agente.
+- `ask_user` mostra perguntas estruturadas inline, com opções e resposta livre. O cartão identifica
+  o agente que perguntou; resposta, cancelamento, reset, abort e encerramento resolvem a espera sem
+  confundir esclarecimentos com aprovações de ferramentas.
+
+**M4.2 — Workers isolados (Core / RubyCLI) ✅**
+- Cada worker recebe branch e **git worktree isolado** criado de um snapshot de arquivos tracked,
+  alterações locais e novos arquivos. A aplicação do diff é sempre aprovada pelo usuário.
+- `explorer` é read-only; `worker` edita no próprio worktree. Concorrência limitada a três; falha,
+  descarte e cancelamento limpam worktree e branch.
 - Tool `workflow`: script JS com `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()`,
-  e resultado estruturado por schema JSON.
+  e resultado estruturado por schema JSON — **ainda pendente**, separada do fluxo básico entregue.
 
-**Desktop**
-- Árvore de subagentes: progresso, status, tokens/custo por agente.
-- Diff do worktree **antes** do merge.
+**M4.3 — Acompanhamento e revisão (Desktop) ✅**
+- Cartões no chat mostram progresso, status, modelo, effort, papel, instruções e tokens/tools por
+  agente. Perguntas/respostas aparecem no mesmo chat.
+- O diff do worktree aparece antes da ação **Aplicar diff**. Conflitos mantêm a revisão aberta e não
+  alteram os arquivos; o usuário pode tentar de novo ou descartar.
 
 ### M5 — Empacotamento + release
 
-- `electron-builder` 26, target **NSIS x64 + arm64**.
-- `electron-updater` + GitHub Releases.
-- CI GitHub Actions: `windows-latest` (build), `ubuntu-latest` (AppImage/deb),
-  `macos-latest` (dmg — só via CI, exige runner macOS).
+- `electron-builder` 26 empacota NSIS x64, arm64 e um instalador combinado que detecta a arquitetura;
+  o engine vai em `resources/engine` fora do ASAR para `utilityProcess` abrir um arquivo real.
+- `electron-updater` está incluído como dependência de runtime. O updater só inicia quando o pacote
+  contém `app-update.yml`; verificação de assinatura do instalador Windows continua habilitada.
+- GitHub Actions tem CI Windows (inclui build/testes determinísticos do RubyCLI, typecheck/build e
+  verificação do pacote) e workflow de release em runners Windows, Linux e macOS. A release fica
+  como draft até alguém revisar e publicar manualmente.
+- Linux publica AppImage/deb com feed de atualização. Windows e macOS só geram feed se houver
+  assinatura configurada. Sem certificado, os instaladores ainda são gerados, mas sem auto-update
+  nessas plataformas; Windows pode mostrar alerta de editor desconhecido.
+- O build local deste checkout gerou os três instaladores Windows. Linux/macOS não foram executados
+  neste host e dependem da CI.
 
-> ⚠️ **Hoje não existe `.exe`.** O app só roda do código, via `npm start`. Quem quiser testar
-> sem terminal depende do M5.
+#### Build e release
+
+```powershell
+# O engine local precisa estar compilado antes do Desktop.
+cd G:\VSCodeProjects\RubyCLI ; npm run build
+cd G:\VSCodeProjects\RubyDesktop ; npm run dist
+
+# Apenas diretório instalado, útil para inspeção sem gerar instaladores.
+npm run package:dir
+```
+
+No GitHub, configure `RUBYCLI_REPOSITORY` e `RUBYCLI_REF` como Actions variables se a release
+precisar de uma branch/commit específico do engine; o padrão é `marcosvkp/rubycli` em `main`.
+Para release, a tag deve corresponder à versão do `package.json` (por exemplo, `v0.1.0`). O workflow
+envia os instaladores e metadados para um draft; publique-o manualmente após revisar os artefatos.
+
+Segredos opcionais de assinatura: `WIN_CSC_LINK` e `WIN_CSC_KEY_PASSWORD` para Windows;
+`CSC_LINK` e `CSC_KEY_PASSWORD` para macOS. Para notarização macOS, também configure `APPLE_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Não são necessários para gerar os pacotes, mas
+Windows/macOS ficam sem atualização automática quando a assinatura não está configurada.
 
 ---
 
-## 2. Lacunas no que já está construído
+## 2. Lacunas e status do que já está construído
 
-Estas não são "próximas fases" — são buracos no que já foi entregue. Ordenadas por gravidade.
+Os itens concluídos registram mudanças recentes para evitar retrabalho; os demais são lacunas
+pendentes, ordenadas por impacto.
 
-### 🔴 2.1 A tool `task` está registrada e **sempre falha**
+### ✅ 2.1 A tool `task` — explorer e worker entregues
 
-`createDefaultRegistry(model, runner)` é chamado no
-[`engine-host`](src/engine-host/index.ts) **sem o terceiro argumento** (`spawnSubAgent`). Mas
-`createDefaultRegistry` registra `createTaskTool(opts?.spawnSubAgent)` **incondicionalmente**
-(`src/tools/index.ts:58`).
+O Desktop fornece `spawnSubAgent` ao registry. `explorer` usa tools read-only; `worker` ganha
+worktree isolado e o diff aguarda aprovação explícita. Ambos não delegam recursivamente.
 
-Consequência: o agente vê `task` no catálogo de tools, decide delegar, chama — e recebe
-`"Sub-agent execution is not configured in this environment."`. Ele vai tentar de novo, gastar
-turnos, e o usuário vê uma falha que parece bug do modelo.
+### ✅ 2.2 Persistência e navegação de conversas entregues
 
-É **pior do que não ter a tool**. Duas saídas, ambas pequenas:
+O Desktop usa `Session` e `Agent.restoreMessages()`: retoma a última sessão não vazia ao abrir e
+permite iniciar ou retomar conversas pela sidebar. A lista é por workspace.
 
-- **Ligar** (recomendado): copiar o `spawnExploreAgent` do
-  [`cli/index.ts`](../RubyCLI/src/cli/index.ts) — um `Agent` filho com contexto novo e só
-  tools `readonly`, sem `task` dentro (sem recursão). Isso já entrega o M4 "explorer" e é
-  ~30 linhas.
-- **Remover** do registry no Desktop, se o M4 for demorar.
+### ✅ 2.3 Configuração de chave via `safeStorage` entregue; legado segue suportado
 
-### 🔴 2.2 Não há persistência de conversa
-
-Fechar o app **perde o histórico**. O engine tem `Session` (JSON em `~/.rubycli/sessions/`) e
-`Agent.restoreMessages()`, mas o Desktop não usa nenhum dos dois. Também não há lista de
-sessões nem "retomar a última".
-
-O `PLANO.md` previa "sessões isoladas + persistência (JSON, sem nativos)" no M2 — ficou de fora.
-
-### 🟡 2.3 A chave de API está em texto plano
-
-Lida de `~/.rubycli/config.json`. O plano do M2 dizia migrar para **`safeStorage`** (keychain do
-SO). Não foi feito — a única menção no código é um comentário
-([`engine-host/index.ts:465`](src/engine-host/index.ts)).
-
-Atenção: o `safeStorage` **não pode simplesmente substituir** a leitura do config. O app hoje
-funciona para quem já tem o CLI configurado, o que é uma boa propriedade. O certo é
-*salvar* via `safeStorage` quando o usuário digitar a chave na UI, e *ler* na ordem
-safeStorage → env → config. Também falta uma UI para o usuário inserir a chave.
+Configurações permite salvar a chave em armazenamento criptografado pelo SO via Electron
+`safeStorage`. O engine mantém compatibilidade com `RUBY_API_KEY` e com o `config.json` do CLI
+quando nenhuma chave foi salva pela UI. A chave salva pelo Desktop é passada ao processo do engine
+por variável de ambiente, sem expô-la ao renderer.
 
 ### 🟡 2.4 Goal sem auto-continuação
 
@@ -91,10 +174,10 @@ O plano do M2 previa auto-continuação com `maxRounds` e o comando `/auto`. Nã
 Consequência: o agente não continua sozinho em direção ao objetivo — cada turno precisa de
 um humano.
 
-### 🟡 2.5 Blocos de código sem colorização
+### ✅ 2.5 Realce de código entregue
 
-Markdown renderiza, mas código sai branco. Para um agente de código isso incomoda. Decisão
-em aberto (§4): `highlight.js` (~100 KB, síncrono) ou `shiki` (~1 MB, assíncrono).
+Blocos têm realce lexical leve para linguagens comuns e botão de copiar. O realce não é um parser
+completo de gramática; Shiki continua sendo uma opção se a fidelidade de sintaxe virar prioridade.
 
 ### 🟢 2.6 `AgentEvent` não enriquecido (dívida do M1)
 
@@ -199,11 +282,9 @@ Baseline atual: **1129 passando, 0 falhando**. Qualquer falha nova é regressão
 
 | Questão | Por que importa | Recomendação |
 |---|---|---|
-| **Code signing no Windows** | Sem certificado, o SmartScreen avisa "editor desconhecido" em todo install | Resolver antes de distribuir; um cert OV já resolve |
-| **`@rubyclii/cli` publicado ou privado?** | O app empacotado precisa da dep. Hoje é `file:../RubyCLI` (junction npm) — **isso não empacota** | Publicar no npm, ou bundlear o engine no build (o `vite.engine.config.ts` já bundleia, então talvez baste) |
-| **Política de merge dos worktrees (M4)** | Merge automático pode sobrescrever trabalho do usuário | **Sempre mostrar o diff e perguntar** |
-| **`highlight.js` vs `shiki`** | Peso do bundle vs qualidade | `highlight.js` se o bundle importar; `shiki` se a qualidade ganhar |
-| **Ligar ou remover a tool `task`** | Ver §2.1 — hoje ela sempre falha | Ligar (entrega o explorer do M4 de graça) |
+| **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e Windows/macOS não recebem feed de atualização | Configurar os segredos antes de publicar uma release distribuível |
+| **Ref do RubyCLI na CI** | Desktop usa `file:../RubyCLI`; CI clona um checkout irmão para compilar o engine | Fixar `RUBYCLI_REF` numa branch/commit que contenha as mudanças de engine desejadas |
+| **DSL de workflows (M4)** | Composição programática de agentes aumenta o alcance da orquestração | Planejar depois do fluxo básico de workers; inclui `parallel`, `pipeline` e schema de saída |
 
 ---
 
@@ -251,15 +332,10 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 
 ## 6. Ordem sugerida para continuar
 
-1. **§2.1 — ligar a tool `task`** (ou removê-la). É a única lacuna que faz o agente *falhar
-   ativamente* hoje, e é barata.
-2. **§2.2 — persistência de sessão.** Sem isso o app perde tudo ao fechar; é a lacuna que mais
-   incomoda no uso diário.
-3. **M5 — empacotar.** Ter um `.exe` destrava teste por terceiros e é pré-requisito para
-   qualquer coisa de release.
-4. **M4 — subagentes com worktree.** É a maior peça restante e a mais arriscada (merge).
-5. Depois: §2.3 (`safeStorage`), §2.4 (auto-continuação do goal), §2.5 (highlighting), §2.13
-   (paths do coverage).
-
-Se o objetivo for **colocar na mão de alguém para usar**, a ordem certa é 1 → 3 → 2.
-Se for **capacidade do agente**, é 1 → 4.
+1. **Preparar a primeira release M5:** definir a ref do RubyCLI e os segredos de assinatura/notarização;
+   disparar a CI por tag, revisar o draft multiplataforma e publicar manualmente.
+2. **DSL de workflow:** `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` e resultado por schema.
+3. **Auto-continuação de goal:** limite de rodadas, estado `blocked` e recuperação após falha.
+4. **Polimento da UX:** workspaces recentes, múltiplas abas do browser e uma revisão de acessibilidade
+   em tamanhos menores. São melhorias separadas da persistência de conversas já entregue.
+5. Corrigir os paths do coverage da configuração Vitest do RubyCLI (§2.13).

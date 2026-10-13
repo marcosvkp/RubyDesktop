@@ -10,10 +10,10 @@
  * therefore gets the engine's event *types* without pulling any engine code into
  * the browser bundle — the renderer must never import `@rubyclii/cli` at runtime.
  */
-import type { AgentEvent, PermissionMode } from "@rubyclii/cli";
+import type { AgentEvent, Message, PermissionMode, SessionSummary } from "@rubyclii/cli";
 
 /** Re-exported so the renderer can name agent events without importing the engine. */
-export type { AgentEvent, PermissionMode };
+export type { AgentEvent, Message, PermissionMode, SessionSummary };
 
 /** A model as reported by the Ruby catalog. */
 export interface ModelSummary {
@@ -21,7 +21,75 @@ export interface ModelSummary {
   label: string;
   contextWindow?: number;
   supportsReasoning?: boolean;
+  reasoningEfforts?: ReasoningEffort[];
   supportsVision?: boolean;
+}
+
+export type ReasoningEffort = "low" | "medium" | "high";
+export type SubAgentRole = "explorer" | "worker";
+export type SubAgentStatus =
+  | "configuring"
+  | "queued"
+  | "running"
+  | "review"
+  | "merging"
+  | "merged"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface UserQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface UserQuestionPrompt {
+  id: string;
+  header?: string;
+  question: string;
+  options: UserQuestionOption[];
+}
+
+export interface UserQuestionRequest {
+  id: string;
+  agentId: string;
+  agentName: string;
+  title: string;
+  questions: UserQuestionPrompt[];
+}
+
+export interface SubAgentConfigRequest {
+  id: string;
+  title: string;
+  prompt: string;
+  role: SubAgentRole;
+  proposedModel: string;
+  proposedReasoningEffort?: ReasoningEffort;
+  proposedInstructions: string;
+  proposalNote?: string;
+}
+
+export interface SubAgentSummary {
+  id: string;
+  title: string;
+  prompt: string;
+  role: SubAgentRole;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  instructions: string;
+  status: SubAgentStatus;
+  progress?: string;
+  output?: string;
+  diff?: string;
+  changedFiles?: string[];
+  error?: string;
+  usage?: { inputTokens: number; outputTokens: number; cachedTokens: number; llmCalls: number; toolCalls: number };
+}
+
+/** Minimal metadata the renderer needs for slash-command completion. */
+export interface SkillSummary {
+  name: string;
+  description: string;
 }
 
 /** Lifecycle state of the engine host, surfaced in the status bar. */
@@ -166,12 +234,22 @@ export interface BrowserResult {
  * because latency, token counts and guard trips are not part of the agent's
  * conversation — they are telemetry about it.
  */
-export type MetricLine =
-  | { kind: "llm"; model: string; inputTokens: number; outputTokens: number; latencyMs: number; firstTokenLatencyMs?: number }
+type MetricLinePayload =
+  | {
+      kind: "llm";
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      latencyMs: number;
+      firstTokenLatencyMs?: number;
+      cachedTokens?: number;
+    }
   | { kind: "tool"; name: string; latencyMs: number; success: boolean; outputBytes: number }
   | { kind: "denied"; name: string; reason: string }
   | { kind: "guard"; guard: string; reason: string }
   | { kind: "compact"; trigger: string; detail: string };
+
+export type MetricLine = MetricLinePayload & { agentId?: string };
 
 
 // --- Engine protocol --------------------------------------------------------
@@ -180,6 +258,7 @@ export type MetricLine =
 export type EngineRequest =
   | { type: "hello" }
   | { type: "prompt"; text: string }
+  | { type: "activateSkill"; name: string; args: string }
   | { type: "abort" }
   | { type: "setModel"; model: string }
   | { type: "setPermissionMode"; mode: PermissionMode }
@@ -191,7 +270,22 @@ export type EngineRequest =
       /** Which key to persist when `scope` is not "once". Defaults to "exact". */
       grantKey?: GrantKeyKind;
     }
+  | {
+      type: "userQuestionResponse";
+      id: string;
+      answers: Record<string, string> | null;
+    }
+  | {
+      type: "subAgentConfigResponse";
+      id: string;
+      action: "start" | "cancel";
+      model?: string;
+      reasoningEffort?: ReasoningEffort;
+      instructions?: string;
+    }
+  | { type: "subAgentReviewResponse"; id: string; action: "merge" | "discard" | "cancel" }
   | { type: "compact" }
+  | { type: "session"; action: "new" | "resume"; sessionId?: string }
   | { type: "goal"; action: "get" }
   | { type: "goal"; action: "set"; text: string }
   | { type: "goal"; action: "note"; text: string }
@@ -229,16 +323,30 @@ export type EngineResponse =
       model: string;
       toolCount: number;
       skillCount: number;
+      skills: SkillSummary[];
       keySource: string;
       permissionMode: PermissionMode;
     }
   | { type: "models"; models: ModelSummary[] }
+  | { type: "skills"; skills: SkillSummary[] }
+  | {
+      type: "sessions";
+      sessions: SessionSummary[];
+      currentSessionId?: string;
+      /** Present when the active session changed and the renderer should replace its transcript. */
+      history?: Message[];
+    }
   | { type: "status"; status: EngineStatus }
   | { type: "event"; event: AgentEvent }
   | { type: "usage"; inputTokens: number; outputTokens: number; contextWindow: number }
   | { type: "approvalRequest"; request: ApprovalRequest }
   /** Sent after a response lands, so the modal can clear and the list can update. */
   | { type: "approvalResolved"; id: string; decision: ApprovalDecision; scope: ApprovalScope }
+  | { type: "userQuestionRequest"; request: UserQuestionRequest }
+  | { type: "userQuestionResolved"; id: string; cancelled: boolean }
+  | { type: "subAgentConfigRequest"; request: SubAgentConfigRequest }
+  | { type: "subAgentConfigResolved"; id: string; action: "start" | "cancel" }
+  | { type: "subAgentUpdate"; agent: SubAgentSummary }
   | { type: "permissionMode"; mode: PermissionMode }
   | { type: "grants"; grants: GrantsSnapshot }
   | { type: "goal"; goal: GoalSummary | null }
@@ -269,8 +377,12 @@ export interface RubyDesktopApi {
   setWorkspace(path: string): void;
   /** Engine lifecycle + model catalog snapshot. */
   getEngineInfo(): Promise<EngineResponse | undefined>;
+  /** Encrypt and store the Ruby API key through the operating system keychain. */
+  saveApiKey(key: string): Promise<{ ok: boolean; error?: string }>;
   /** Start a turn. Streamed output arrives via `onEngineMessage`. */
   sendPrompt(text: string): void;
+  /** Activate one discovered Skill as an explicit user command. */
+  activateSkill(name: string, args: string): void;
   /** Cancel the in-flight turn. */
   abort(): void;
   /** Switch the model used for subsequent turns. */
@@ -284,8 +396,22 @@ export interface RubyDesktopApi {
     scope: ApprovalScope,
     grantKey?: GrantKeyKind,
   ): void;
+  /** Answer an interactive question from the main agent or a sub-agent. */
+  respondUserQuestion(id: string, answers: Record<string, string> | null): void;
+  /** Approve or cancel an agent configuration proposed by the orchestrator. */
+  respondSubAgentConfig(
+    id: string,
+    action: "start" | "cancel",
+    config?: { model: string; reasoningEffort?: ReasoningEffort; instructions: string },
+  ): void;
+  /** Approve applying a worker's diff or discard the isolated worktree. */
+  respondSubAgentReview(id: string, action: "merge" | "discard" | "cancel"): void;
   /** Compact the conversation now. */
   compact(): void;
+  /** Create a new conversation for the current workspace. */
+  newSession(): void;
+  /** Resume a conversation for the current workspace. */
+  resumeSession(sessionId: string): void;
   /** Read the goal for this workspace. */
   getGoal(): void;
   /** Set / replace the goal for this workspace. */
@@ -330,16 +456,23 @@ export const IPC = {
     getWorkspace: "ruby:get-workspace",
     pickWorkspace: "ruby:pick-workspace",
     getEngineInfo: "ruby:get-engine-info",
+    saveApiKey: "ruby:save-api-key",
   },
   /** Renderer → main, fire-and-forget. */
   send: {
     prompt: "ruby:prompt",
+    activateSkill: "ruby:activate-skill",
     abort: "ruby:abort",
     setWorkspace: "ruby:set-workspace",
     setModel: "ruby:set-model",
     setPermissionMode: "ruby:set-permission-mode",
     approvalResponse: "ruby:approval-response",
+    userQuestionResponse: "ruby:user-question-response",
+    subAgentConfigResponse: "ruby:sub-agent-config-response",
+    subAgentReviewResponse: "ruby:sub-agent-review-response",
     compact: "ruby:compact",
+    newSession: "ruby:new-session",
+    resumeSession: "ruby:resume-session",
     getGoal: "ruby:get-goal",
     setGoal: "ruby:set-goal",
     noteGoal: "ruby:note-goal",

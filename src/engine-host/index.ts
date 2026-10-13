@@ -24,6 +24,8 @@ import {
   createDefaultRegistry,
   createSandboxRunner,
   SkillRegistry,
+  ToolRegistry,
+  Session,
   loadConfig,
   loadSettings,
   loadSystemInstruction,
@@ -68,6 +70,10 @@ import type {
   ObservabilityEvent,
   PermissionMode,
   Provider,
+  Message,
+  SpawnSubAgentOptions,
+  UserQuestionRequest as AskUserPayload,
+  UserQuestionResult,
 } from "@rubyclii/cli";
 import { BrowserBridge, registerBrowserTools } from "./browser-tools.js";
 import type {
@@ -82,7 +88,13 @@ import type {
   McpServerSummary,
   MetricLine,
   ModelSummary,
+  ReasoningEffort,
+  SkillSummary,
+  SubAgentConfigRequest,
+  SubAgentSummary,
+  UserQuestionRequest,
 } from "@shared/ipc";
+import { WorktreeManager } from "./worktrees.js";
 
 // `process.parentPort` is added by Electron's utilityProcess and is not part of
 // the standard Node typings.
@@ -97,6 +109,10 @@ function fail(err: unknown): void {
   post({ type: "error", message: err instanceof Error ? err.message : String(err) });
 }
 
+function getSkillSummaries(): SkillSummary[] {
+  return skillRegistry?.list().map(({ name, description }) => ({ name, description })) ?? [];
+}
+
 // --- Session state ----------------------------------------------------------
 
 let model = DEFAULT_MODEL;
@@ -105,8 +121,18 @@ let apiKey = "";
 let keySource = "unknown";
 let provider: Provider = "rubycli";
 let agent: Agent | undefined;
+let session: Session | undefined;
+let sessionMessages: Message[] = [];
 let toolCount = 0;
 let skillCount = 0;
+let skillRegistry: SkillRegistry | undefined;
+let modelCatalog: ModelSummary[] = [];
+const worktrees = new WorktreeManager();
+const subAgentControllers = new Map<string, AbortController>();
+const subAgentRuns = new Map<string, Promise<string>>();
+const pendingSubAgentReviews = new Map<string, (action: "merge" | "discard" | "cancel") => void>();
+let activeSubAgentCount = 0;
+const MAX_CONCURRENT_SUBAGENTS = 3;
 let permissionMode: PermissionMode = "normal";
 /** Set by `abort`; the run loop checks it between events. */
 let cancelled = false;
@@ -240,7 +266,7 @@ async function handleMcp(request: Extract<EngineRequest, { type: "mcp" }>): Prom
  * not travel as `AgentEvent`s: the panel shows latency, token counts and guard
  * trips, none of which belong in the transcript the model sees.
  */
-function onObservability(event: ObservabilityEvent): void {
+function onObservability(event: ObservabilityEvent, agentId?: string): void {
   let line: MetricLine | undefined;
   switch (event.type) {
     case "llm_call_end":
@@ -251,6 +277,7 @@ function onObservability(event: ObservabilityEvent): void {
         outputTokens: event.outputTokens,
         latencyMs: event.latencyMs,
         firstTokenLatencyMs: event.firstTokenLatencyMs,
+        cachedTokens: event.cachedTokens,
       };
       break;
     case "tool_exec_end":
@@ -283,13 +310,14 @@ function onObservability(event: ObservabilityEvent): void {
       // either redundant with a line above or too noisy to be worth a row.
       return;
   }
-  post({ type: "metric", line });
+  post({ type: "metric", line: agentId ? { ...line, agentId } : line });
 }
 
 // --- Approval gate ----------------------------------------------------------
 
 interface PendingApproval {
   settle: (decision: ApprovalDecision) => void;
+  agentId?: string;
   toolName: string;
   grantKeys: { exact: string; toolWide: string; mcpServerWide?: string };
   /**
@@ -309,6 +337,26 @@ interface PendingApproval {
  */
 const pendingApprovals = new Map<string, PendingApproval>();
 
+interface PendingUserQuestion {
+  request: UserQuestionRequest;
+  settle: (result: UserQuestionResult) => void;
+}
+
+interface ResolvedSubAgentConfig {
+  id: string;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  instructions: string;
+}
+
+interface PendingSubAgentConfig {
+  request: SubAgentConfigRequest;
+  settle: (config: ResolvedSubAgentConfig | null) => void;
+}
+
+const pendingUserQuestions = new Map<string, PendingUserQuestion>();
+const pendingSubAgentConfigs = new Map<string, PendingSubAgentConfig>();
+
 /**
  * How long the engine waits for a human before denying.
  *
@@ -316,6 +364,169 @@ const pendingApprovals = new Map<string, PendingApproval>();
  * crashes, the tool call is denied rather than holding the agent loop open.
  */
 const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+const USER_QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
+const SUBAGENT_CONFIG_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Pauses the requesting agent until the renderer submits its structured answer. */
+function requestUserQuestion(
+  agentId: string,
+  agentName: string,
+  question: AskUserPayload,
+): Promise<UserQuestionResult> {
+  const id = randomUUID();
+  const request: UserQuestionRequest = {
+    id,
+    agentId,
+    agentName,
+    title: question.title,
+    questions: question.questions,
+  };
+
+  return new Promise<UserQuestionResult>((resolve) => {
+    let settled = false;
+    const settle = (result: UserQuestionResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pendingUserQuestions.delete(id);
+      post({ type: "userQuestionResolved", id, cancelled: result.cancelled });
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      post({ type: "error", message: `Question from ${agentName} timed out; it was cancelled.` });
+      settle({ answers: {}, cancelled: true });
+    }, USER_QUESTION_TIMEOUT_MS);
+
+    pendingUserQuestions.set(id, { request, settle });
+    post({ type: "userQuestionRequest", request });
+  });
+}
+
+/** A stopped turn must never leave an ask-user tool awaiting renderer input. */
+function cancelAllUserQuestions(reason: string): void {
+  if (pendingUserQuestions.size === 0) return;
+  for (const pending of [...pendingUserQuestions.values()]) {
+    pending.settle({ answers: {}, cancelled: true });
+  }
+  post({ type: "error", message: reason });
+}
+
+function cancelUserQuestionsForAgent(agentId: string): void {
+  for (const pending of [...pendingUserQuestions.values()]) {
+    if (pending.request.agentId === agentId) pending.settle({ answers: {}, cancelled: true });
+  }
+}
+
+function handleUserQuestionResponse(id: string, answers: Record<string, string> | null): void {
+  const pending = pendingUserQuestions.get(id);
+  if (!pending) return;
+  if (!answers) {
+    pending.settle({ answers: {}, cancelled: true });
+    return;
+  }
+
+  const allowedIds = new Set(pending.request.questions.map((question) => question.id));
+  const safeAnswers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(answers)) {
+    if (allowedIds.has(key) && typeof value === "string") safeAnswers[key] = value.slice(0, 3000);
+  }
+  if (pending.request.questions.some((question) => !safeAnswers[question.id]?.trim())) {
+    post({ type: "error", message: "Answer every question before submitting." });
+    return;
+  }
+  pending.settle({ answers: safeAnswers, cancelled: false });
+}
+
+/** Lets the user inspect and edit a model-authored worker configuration before it runs. */
+function requestSubAgentConfig(
+  prompt: string,
+  options: SpawnSubAgentOptions,
+): Promise<ResolvedSubAgentConfig | null> {
+  const requestedModel = options.model ?? model;
+  let proposedModel = requestedModel;
+  let modelInfo = modelCatalog.find((entry) => entry.id === proposedModel);
+  const notes: string[] = [];
+  if (!modelInfo) {
+    modelInfo = modelCatalog.find((entry) => entry.id === model) ?? modelCatalog[0];
+    if (!modelInfo) throw new Error("The model catalog is unavailable; no sub-agent was started.");
+    proposedModel = modelInfo.id;
+    notes.push(`O modelo '${requestedModel}' não está no catálogo atual. Revise a alternativa proposta: '${proposedModel}'.`);
+  }
+  const efforts = modelInfo.reasoningEfforts ?? [];
+  const proposedEffort = options.reasoningEffort && efforts.includes(options.reasoningEffort)
+    ? options.reasoningEffort
+    : undefined;
+  if (options.reasoningEffort && !proposedEffort) {
+    notes.push(`O modelo '${proposedModel}' não oferece o effort '${options.reasoningEffort}'. Escolha outro modelo ou effort.`);
+  }
+
+  const id = randomUUID();
+  const request: SubAgentConfigRequest = {
+    id,
+    title: options.title,
+    prompt,
+    role: options.role,
+    proposedModel,
+    ...(proposedEffort ? { proposedReasoningEffort: proposedEffort } : {}),
+    proposedInstructions: options.instructions ?? "",
+    ...(notes.length ? { proposalNote: notes.join(" ") } : {}),
+  };
+
+  return new Promise<ResolvedSubAgentConfig | null>((resolve) => {
+    let settled = false;
+    const settle = (config: ResolvedSubAgentConfig | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pendingSubAgentConfigs.delete(id);
+      if (!config) post({ type: "subAgentConfigResolved", id, action: "cancel" });
+      resolve(config);
+    };
+
+    const timer = setTimeout(() => {
+      post({ type: "error", message: `Configuration for '${options.title}' timed out.` });
+      settle(null);
+    }, SUBAGENT_CONFIG_TIMEOUT_MS);
+
+    pendingSubAgentConfigs.set(id, { request, settle });
+    post({ type: "subAgentConfigRequest", request });
+  });
+}
+
+function handleSubAgentConfigResponse(
+  request: Extract<EngineRequest, { type: "subAgentConfigResponse" }>,
+): void {
+  const pending = pendingSubAgentConfigs.get(request.id);
+  if (!pending) return;
+  if (request.action === "cancel") {
+    pending.settle(null);
+    return;
+  }
+
+  const modelInfo = modelCatalog.find((entry) => entry.id === request.model);
+  if (!modelInfo) {
+    post({ type: "error", message: "O modelo selecionado não está mais disponível no catálogo." });
+    pending.settle(null);
+    return;
+  }
+  if (request.reasoningEffort && !modelInfo.reasoningEfforts?.includes(request.reasoningEffort)) {
+    post({
+      type: "error",
+      message: `O modelo '${modelInfo.id}' não aceita o effort '${request.reasoningEffort}'.`,
+    });
+    pending.settle(null);
+    return;
+  }
+
+  pending.settle({
+    id: request.id,
+    model: modelInfo.id,
+    ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+    instructions: (request.instructions ?? "").slice(0, 8000),
+  });
+  post({ type: "subAgentConfigResolved", id: request.id, action: "start" });
+}
 
 /** The single most useful argument to show a human for a given tool. */
 function approvalDetail(toolName: string, args: Record<string, unknown>): string {
@@ -327,7 +538,11 @@ function approvalDetail(toolName: string, args: Record<string, unknown>): string
 }
 
 /** Asks the renderer, then waits for the answer. */
-function requestApproval(toolName: string, args: Record<string, unknown>): Promise<ApprovalDecision> {
+function requestApproval(
+  toolName: string,
+  args: Record<string, unknown>,
+  agentId?: string,
+): Promise<ApprovalDecision> {
   const id = randomUUID();
   const mcpServer = toolName.match(/^mcp__(.+?)__/)?.[1];
 
@@ -362,6 +577,7 @@ function requestApproval(toolName: string, args: Record<string, unknown>): Promi
 
     pendingApprovals.set(id, {
       settle,
+      agentId,
       toolName,
       grantKeys: request.grantKeys,
       neverPersist: matchesNeverAutoApprove(toolName, args),
@@ -378,14 +594,26 @@ function requestApproval(toolName: string, args: Record<string, unknown>): Promi
  * CLI — including the rule that grants are only ever read from user-controlled
  * storage, never from a repository-shipped `.rubycli/settings.json`.
  */
-const confirmFn: ConfirmFn = async (toolName, args) => {
-  const allowSet = new Set([...globalAllowSet, ...projectAllowSet]);
-  // `interactive: true` — a modal is the GUI's equivalent of a TTY prompt.
-  const decision = decideConfirmation(allowSet, denyPatterns, toolName, args, true);
-  if (decision === "allow") return "allow";
-  if (decision === "deny") return "deny";
-  return requestApproval(toolName, args);
-};
+function createConfirmFn(agentId?: string): ConfirmFn {
+  return async (toolName, args) => {
+    const allowSet = new Set([...globalAllowSet, ...projectAllowSet]);
+    // `interactive: true` — a modal is the GUI's equivalent of a TTY prompt.
+    const decision = decideConfirmation(allowSet, denyPatterns, toolName, args, true);
+    if (decision === "allow") return "allow";
+    if (decision === "deny") return "deny";
+    return requestApproval(toolName, args, agentId);
+  };
+}
+
+const confirmFn = createConfirmFn("main");
+
+function denyAgentApprovals(agentId: string): void {
+  for (const [id, pending] of [...pendingApprovals]) {
+    if (pending.agentId !== agentId) continue;
+    post({ type: "approvalResolved", id, decision: "deny", scope: "once" });
+    pending.settle("deny");
+  }
+}
 
 /** Persists a grant at the scope the user chose. */
 async function persistGrant(key: string, scope: ApprovalScope): Promise<void> {
@@ -447,13 +675,22 @@ async function handleApprovalResponse(
 
 /** Denies every in-flight approval — used on abort, reset and end of turn. */
 function denyAllPending(reason: string): void {
-  if (pendingApprovals.size === 0) return;
+  const hadApprovals = pendingApprovals.size > 0;
+  const hadQuestions = pendingUserQuestions.size > 0;
+  const hadSubAgentWork = pendingSubAgentConfigs.size > 0 || subAgentControllers.size > 0;
   for (const [id, pending] of [...pendingApprovals]) {
     post({ type: "approvalResolved", id, decision: "deny", scope: "once" });
     pending.settle("deny");
   }
   pendingApprovals.clear();
-  post({ type: "error", message: reason });
+  if (hadQuestions) cancelAllUserQuestions(reason);
+  for (const pending of [...pendingSubAgentConfigs.values()]) pending.settle(null);
+  for (const [id, controller] of subAgentControllers) {
+    controller.abort();
+    cancelUserQuestionsForAgent(id);
+    pendingSubAgentReviews.get(id)?.("cancel");
+  }
+  if (hadApprovals || hadSubAgentWork) post({ type: "error", message: reason });
 }
 
 // --- Credentials and agent construction -------------------------------------
@@ -469,7 +706,13 @@ function denyAllPending(reason: string): void {
  */
 async function resolveCredentials(): Promise<{ key: string; source: string }> {
   const fromEnv = findApiKeyInEnv();
-  if (fromEnv) return { key: fromEnv.value, source: `${fromEnv.name} (environment)` };
+  if (fromEnv) {
+    const source =
+      process.env.RUBY_DESKTOP_KEY_SOURCE === "safeStorage"
+        ? "Ruby Desktop · cofre seguro do sistema"
+        : `${fromEnv.name} (environment)`;
+    return { key: fromEnv.value, source };
+  }
 
   const config = await loadConfig();
   if (config.rubyApiKey) return { key: config.rubyApiKey, source: "~/.rubycli/config.json" };
@@ -511,6 +754,262 @@ async function loadPermissions(): Promise<void> {
   if (warning) post({ type: "error", message: warning });
 }
 
+function postSubAgent(agent: SubAgentSummary): void {
+  post({ type: "subAgentUpdate", agent });
+}
+
+function waitForSubAgentReview(
+  id: string,
+): Promise<"merge" | "discard" | "cancel"> {
+  return new Promise((resolve) => {
+    pendingSubAgentReviews.set(id, (action) => {
+      pendingSubAgentReviews.delete(id);
+      resolve(action);
+    });
+  });
+}
+
+function handleSubAgentReviewResponse(
+  id: string,
+  action: "merge" | "discard" | "cancel",
+): void {
+  const controller = subAgentControllers.get(id);
+  if (action === "cancel" && controller) {
+    controller.abort();
+    denyAgentApprovals(id);
+    cancelUserQuestionsForAgent(id);
+  }
+  pendingSubAgentReviews.get(id)?.(action);
+}
+
+async function acquireSubAgentSlot(signal: AbortSignal): Promise<() => void> {
+  while (activeSubAgentCount >= MAX_CONCURRENT_SUBAGENTS) {
+    if (signal.aborted) throw new Error("Sub-agent was cancelled while queued.");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (signal.aborted) throw new Error("Sub-agent was cancelled while queued.");
+  activeSubAgentCount++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeSubAgentCount = Math.max(0, activeSubAgentCount - 1);
+  };
+}
+
+async function runSubAgent(
+  prompt: string,
+  options: SpawnSubAgentOptions,
+  config: ResolvedSubAgentConfig,
+): Promise<string> {
+  const id = config.id;
+  const controller = new AbortController();
+  subAgentControllers.set(id, controller);
+  const usage = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, llmCalls: 0, toolCalls: 0 };
+  const summary: SubAgentSummary = {
+    id,
+    title: options.title,
+    prompt,
+    role: options.role,
+    model: config.model,
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    instructions: config.instructions,
+    status: "queued",
+    progress: "Aguardando uma vaga de execução",
+    usage,
+  };
+  postSubAgent(summary);
+
+  let releaseSlot: (() => void) | undefined;
+  let workspaceRoot = process.cwd();
+  let hasWorktree = false;
+  let output = "";
+  try {
+    releaseSlot = await acquireSubAgentSlot(controller.signal);
+    if (controller.signal.aborted) throw new Error("Sub-agent was cancelled before launch.");
+
+    if (options.role === "worker") {
+      summary.progress = "Criando um worktree isolado a partir do estado atual";
+      postSubAgent(summary);
+      workspaceRoot = await worktrees.create(id, process.cwd());
+      hasWorktree = true;
+    }
+
+    const selectedProvider = resolveProviderFor(config.model);
+    const childClient = createClient(config.model, apiKey, {
+      includeUsage: true,
+      provider: selectedProvider,
+      baseUrl,
+      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    });
+    const configFromDisk = await loadConfig();
+    const runner = createSandboxRunner(configFromDisk.sandbox ?? "auto", workspaceRoot);
+    const available = createDefaultRegistry(config.model, runner, {
+      includeTask: false,
+      workspaceRoot,
+      askUser: (question) => requestUserQuestion(id, options.title, question),
+    });
+    let childTools = available;
+    if (options.role === "explorer") {
+      childTools = new ToolRegistry();
+      for (const tool of available.all()) if (tool.readonly) childTools.register(tool);
+    }
+    const childSkills = new SkillRegistry();
+    await childSkills.discover(workspaceRoot);
+    const harness = [
+      "You are a delegated Ruby Desktop sub-agent.",
+      `Role: ${options.role}. Workspace: ${workspaceRoot}.`,
+      options.role === "explorer"
+        ? "Investigate only; available tools are read-only. Return findings and file references."
+        : "Implement only in this isolated worktree. Do not modify the user's main working tree. Return a concise summary of changes and verification.",
+      config.instructions ? `User guidance for this agent:\n${config.instructions}` : "",
+    ].filter(Boolean).join("\n\n");
+    const child = new Agent(
+      childClient,
+      childTools,
+      childSkills,
+      `${await loadSystemInstruction()}\n\n## Sub-agent harness\n\n${harness}`,
+      undefined,
+      options.maxTurns,
+      {
+        model: config.model,
+        provider: selectedProvider,
+        ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+        workspaceRoot,
+        onObservability: (event) => {
+          onObservability(event, id);
+          if (event.type === "llm_call_end") {
+            usage.inputTokens += event.inputTokens;
+            usage.outputTokens += event.outputTokens;
+            usage.cachedTokens += event.cachedTokens ?? 0;
+            usage.llmCalls++;
+          } else if (event.type === "tool_exec_end") {
+            usage.toolCalls++;
+          }
+          postSubAgent({ ...summary, usage: { ...usage } });
+        },
+      },
+    );
+    child.setConfirmFn(createConfirmFn(id));
+    child.setForcesConfirmationFn(forcesConfirmation);
+    child.setPermissionMode(permissionMode);
+    summary.status = "running";
+    summary.progress = options.role === "worker" ? "Implementando no worktree isolado" : "Investigando o workspace";
+    postSubAgent(summary);
+
+    for await (const event of child.run(prompt, "react", controller.signal)) {
+      if (controller.signal.aborted) break;
+      if (event.type === "text") {
+        output += event.text;
+        summary.output = output.slice(-12_000);
+        postSubAgent({ ...summary, usage: { ...usage } });
+      } else if (event.type === "tool_call") {
+        summary.progress = `Usando ${event.name}`;
+        postSubAgent({ ...summary, usage: { ...usage } });
+      } else if (event.type === "tool_result") {
+        summary.progress = `Concluiu ${event.name}`;
+        postSubAgent({ ...summary, usage: { ...usage } });
+      } else if (event.type === "error") {
+        throw new Error(event.message);
+      } else if (event.type === "done") {
+        break;
+      }
+    }
+
+    if (controller.signal.aborted) {
+      summary.status = "cancelled";
+      summary.progress = "Execução cancelada; o worktree será descartado";
+      postSubAgent(summary);
+      return output.trim();
+    }
+
+    if (options.role === "worker") {
+      const result = await worktrees.diff(id);
+      if (result.changedFiles.length === 0) {
+        summary.status = "completed";
+        summary.progress = "Concluído sem alterações no worktree";
+        postSubAgent(summary);
+        return output.trim();
+      }
+
+      summary.status = "review";
+      summary.progress = "Revise o diff; nada foi aplicado ao workspace";
+      summary.diff = result.diff;
+      summary.changedFiles = result.changedFiles;
+      postSubAgent({ ...summary, usage: { ...usage } });
+
+      while (true) {
+        const action = await waitForSubAgentReview(id);
+        if (action === "cancel" || controller.signal.aborted) {
+          summary.status = "cancelled";
+          summary.progress = "Diff descartado; workspace não foi alterado";
+          postSubAgent(summary);
+          return output.trim();
+        }
+        if (action === "discard") {
+          summary.status = "cancelled";
+          summary.progress = "Diff descartado; workspace não foi alterado";
+          postSubAgent(summary);
+          return output.trim();
+        }
+
+        summary.status = "merging";
+        summary.progress = "Verificando conflitos e aplicando o diff aprovado";
+        summary.error = undefined;
+        postSubAgent(summary);
+        try {
+          await worktrees.apply(id);
+          summary.status = "merged";
+          summary.progress = "Diff aprovado e aplicado ao workspace";
+          postSubAgent(summary);
+          return output.trim();
+        } catch (error) {
+          summary.status = "review";
+          summary.progress = "O diff conflita com alterações atuais; revise antes de tentar novamente";
+          summary.error = error instanceof Error ? error.message : String(error);
+          postSubAgent(summary);
+        }
+      }
+    }
+
+    summary.status = "completed";
+    summary.progress = "Investigação concluída";
+    postSubAgent(summary);
+    return output.trim();
+  } catch (error) {
+    summary.status = controller.signal.aborted ? "cancelled" : "failed";
+    summary.error = error instanceof Error ? error.message : String(error);
+    summary.progress = controller.signal.aborted ? "Cancelado" : "Falha na execução";
+    postSubAgent(summary);
+    if (controller.signal.aborted) return output.trim();
+    throw error;
+  } finally {
+    pendingSubAgentReviews.delete(id);
+    cancelUserQuestionsForAgent(id);
+    subAgentControllers.delete(id);
+    releaseSlot?.();
+    if (hasWorktree) await worktrees.cleanup(id);
+  }
+}
+
+async function spawnSubAgent(prompt: string, options: SpawnSubAgentOptions): Promise<string> {
+  const config = await requestSubAgentConfig(prompt, options);
+  if (!config) throw new Error(`Sub-agent '${options.title}' was cancelled before launch.`);
+  const run = runSubAgent(prompt, options, config);
+  subAgentRuns.set(config.id, run);
+  try {
+    const output = await run;
+    const configuration = [
+      `Sub-agent: ${options.title} (${options.role})`,
+      `Model: ${config.model}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""}`,
+      config.instructions ? `Instructions: ${config.instructions}` : "",
+    ].filter(Boolean).join("\n");
+    return `${configuration}\n\n${output}`.trim();
+  } finally {
+    subAgentRuns.delete(config.id);
+  }
+}
+
 /** Builds the agent for the current model. Called on start, model change and reset. */
 async function buildAgent(): Promise<void> {
   provider = resolveProviderFor(model);
@@ -523,9 +1022,20 @@ async function buildAgent(): Promise<void> {
 
   const config = await loadConfig();
   const runner = createSandboxRunner(config.sandbox ?? "auto", process.cwd());
-  const tools = createDefaultRegistry(model, runner);
+  const baseInstruction = await loadSystemInstruction();
+  const catalogInstructions = modelCatalog.length
+    ? `Available sub-agent models (choose exact ids; the user can edit each recommendation):\n${modelCatalog
+        .map((entry) => `- ${entry.id}${entry.reasoningEfforts?.length ? ` (effort: ${entry.reasoningEfforts.join(", ")})` : ""}`)
+        .join("\n")}`
+    : "The model catalog is unavailable; do not invent a sub-agent model id. Ask the user or use the current model if it becomes available.";
+  const systemInstruction = `${baseInstruction}\n\n## Sub-agent orchestration\n\nDelegate independent work with the task tool when it helps. Propose a concise title, role (explorer for read-only research, worker for isolated implementation), exact catalog model, supported reasoning effort, and focused instructions describing boundaries and output. For each proposed sub-agent, the user chooses whether to start with your configuration or edit it first. Workers run in a Git worktree and their diff is never applied until the user approves it.\n\n${catalogInstructions}`;
+  const tools = createDefaultRegistry(model, runner, {
+    spawnSubAgent,
+    askUser: (question) => requestUserQuestion("main", "Ruby", question),
+  });
   const skills = new SkillRegistry();
   await skills.discover(process.cwd());
+  skillRegistry = skills;
 
   // MCP tools join the same registry as the built-ins, which is what makes an MCP
   // server indistinguishable from a native tool from the agent's point of view.
@@ -539,8 +1049,6 @@ async function buildAgent(): Promise<void> {
   // Browser tools are always registered: they fail with a clear message if the
   // panel is closed, which is better than the model not knowing browsing exists.
   registerBrowserTools(tools, browserBridge);
-
-  const systemInstruction = await loadSystemInstruction();
 
   toolCount = tools.all().length;
   skillCount = skills.list().length;
@@ -559,6 +1067,11 @@ async function buildAgent(): Promise<void> {
     { model, provider, onObservability },
   );
 
+  if (session) {
+    agent.setSessionTmpDir(session.tmpDir);
+    if (sessionMessages.length > 0) agent.restoreMessages(sessionMessages);
+  }
+
   // Wire the GUI's half of the permission gate. Without these two the executor
   // denies every call that requires confirmation, silently and without a prompt.
   agent.setConfirmFn(confirmFn);
@@ -574,13 +1087,21 @@ async function reportModels(): Promise<void> {
     return;
   }
 
-  const summaries: ModelSummary[] = models.map((m) => ({
+  const summaries: ModelSummary[] = models.filter((m) => m.id?.trim()).map((m) => {
+    const modelProvider = isRubyCatalogModel(m.id, { hasRubyKey: apiKey.length > 0 })
+      ? "rubycli"
+      : detectProvider(m.id);
+    const supportsEffort = m.supports_reasoning && (modelProvider === "rubycli" || modelProvider === "openai");
+    return {
     id: m.id,
     label: m.display_name ?? m.id,
     contextWindow: remoteContextWindow(m),
     supportsReasoning: m.supports_reasoning,
+    reasoningEfforts: supportsEffort ? ["low", "medium", "high"] : [],
     supportsVision: m.supports_vision,
-  }));
+  };
+  });
+  modelCatalog = summaries;
   post({ type: "models", models: summaries });
 
   // If the configured model is not in this account's catalog, fall back to the
@@ -591,8 +1112,6 @@ async function reportModels(): Promise<void> {
       message: `Model '${model}' is not available for this key; using '${summaries[0].id}'.`,
     });
     model = summaries[0].id;
-    await buildAgent();
-    post({ type: "status", status: "ready" });
   }
 }
 
@@ -608,8 +1127,63 @@ function reportUsage(): void {
   });
 }
 
+/** Sends the current workspace's recent sessions and, when changed, its transcript. */
+async function reportSessions(history?: Message[]): Promise<void> {
+  post({
+    type: "sessions",
+    sessions: await Session.list(process.cwd()),
+    currentSessionId: session?.id,
+    ...(history !== undefined ? { history } : {}),
+  });
+}
+
+/** Starts a new persisted conversation without changing the workspace. */
+async function startNewSession(): Promise<void> {
+  if (running) {
+    post({ type: "error", message: "Finish or stop the current turn before starting a new conversation." });
+    return;
+  }
+  session = await Session.create(process.cwd());
+  sessionMessages = [];
+  await buildAgent();
+  await reportSessions([]);
+  reportUsage();
+  post({ type: "status", status: "ready" });
+}
+
+/** Resumes the engine context and visible transcript from one workspace session. */
+async function resumeSession(sessionId: string): Promise<void> {
+  if (running) {
+    post({ type: "error", message: "Finish or stop the current turn before switching conversations." });
+    return;
+  }
+  const loaded = await Session.loadMessages(sessionId, process.cwd());
+  session = loaded.session;
+  sessionMessages = loaded.messages;
+  await buildAgent();
+  await reportSessions(sessionMessages);
+  reportUsage();
+  post({ type: "status", status: "ready" });
+}
+
+/** Opens the latest non-empty conversation, or creates the first one. */
+async function restoreLatestSession(): Promise<Message[]> {
+  try {
+    const loaded = await Session.loadMessages("latest", process.cwd());
+    session = loaded.session;
+    sessionMessages = loaded.messages;
+    return loaded.messages;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes("No sessions")) throw err;
+    session = await Session.create(process.cwd());
+    sessionMessages = [];
+    return [];
+  }
+}
+
 /** Runs one turn, streaming every engine event to the UI. */
-async function runPrompt(text: string): Promise<void> {
+async function runPrompt(text: string, sessionText = text): Promise<void> {
   if (!agent) {
     post({ type: "error", message: "Engine is not ready yet." });
     return;
@@ -623,20 +1197,86 @@ async function runPrompt(text: string): Promise<void> {
   cancelled = false;
   post({ type: "status", status: "busy" });
 
+  let turnText = "";
   try {
+    await session?.log({ type: "user", content: sessionText });
     for await (const event of agent.run(text)) {
       if (cancelled) break;
+      if (event.type === "text") turnText += event.text;
+      if (event.type === "tool_call") {
+        await session?.log({
+          type: "tool_call",
+          name: event.name,
+          args: event.args,
+          ...(event.thoughtSignature ? { thoughtSignature: event.thoughtSignature } : {}),
+        });
+      }
+      if (event.type === "tool_result") {
+        await session?.log({ type: "tool_result", name: event.name, result: event.result });
+      }
       post({ type: "event", event: event as AgentEvent });
     }
   } catch (err) {
     fail(err);
   } finally {
+    await skillRegistry?.discover(process.cwd());
+    if (skillRegistry) {
+      const discovered = getSkillSummaries();
+      skillCount = discovered.length;
+      post({ type: "skills", skills: discovered });
+    }
+    if (turnText) await session?.log({ type: "assistant", content: turnText });
     // A turn that ends with an unanswered approval would leave the modal on
     // screen forever; settle them before reporting the turn as finished.
     denyAllPending("Turn ended with pending approvals; they were denied.");
     browserBridge.failAll("Turn ended before the browser operation completed.");
     running = false;
     reportUsage();
+    post({ type: "status", status: "ready" });
+    if (session) {
+      try {
+        sessionMessages = (await Session.loadMessages(session.id, process.cwd())).messages;
+      } catch (err) {
+        fail(err);
+      }
+      await reportSessions();
+    }
+  }
+}
+
+/** Activates a discovered Skill from a slash command typed by the user. */
+async function runSkill(name: string, args: string): Promise<void> {
+  if (!agent || !skillRegistry) {
+    post({ type: "error", message: "The Skill catalog is not ready yet." });
+    post({ type: "status", status: "ready" });
+    return;
+  }
+  if (running) {
+    post({ type: "error", message: "A turn is already in progress." });
+    return;
+  }
+
+  const skill = skillRegistry.get(name);
+  if (!skill) {
+    post({ type: "error", message: `Unknown Skill: ${name}` });
+    post({ type: "status", status: "ready" });
+    return;
+  }
+  try {
+    const body = await skillRegistry.load(name, args);
+    if (!body) {
+      post({ type: "error", message: `Could not load Skill: ${name}` });
+      post({ type: "status", status: "ready" });
+      return;
+    }
+
+    agent.injectSkill(name, body);
+    post({ type: "event", event: { type: "skill_activated", name } });
+    const prompt = args.trim() || `Siga as instruções da Skill "${name}".`;
+    const command = `/${name}${args.trim() ? ` ${args.trim()}` : ""}`;
+    await runPrompt(prompt, command);
+  } catch (err) {
+    post({ type: "error", message: err instanceof Error ? err.message : String(err) });
     post({ type: "status", status: "ready" });
   }
 }
@@ -724,27 +1364,35 @@ async function handle(request: EngineRequest): Promise<void> {
         return;
       }
 
+      await reportModels();
       await loadPermissions();
 
+      const history = await restoreLatestSession();
       await buildAgent();
+      await reportSessions(history);
       post({
         type: "ready",
         workspace: process.cwd(),
         model,
         toolCount,
         skillCount,
+        skills: getSkillSummaries(),
         keySource,
         permissionMode,
       });
       post({ type: "status", status: "ready" });
       postGrants();
       await reportGoal();
-      await reportModels();
+      reportUsage();
       return;
     }
 
     case "prompt":
       await runPrompt(request.text);
+      return;
+
+    case "activateSkill":
+      await runSkill(request.name, request.args);
       return;
 
     case "abort":
@@ -755,6 +1403,7 @@ async function handle(request: EngineRequest): Promise<void> {
     case "setModel": {
       model = request.model;
       await buildAgent();
+      reportUsage();
       post({ type: "status", status: "ready" });
       return;
     }
@@ -771,8 +1420,32 @@ async function handle(request: EngineRequest): Promise<void> {
       return;
     }
 
+    case "userQuestionResponse": {
+      handleUserQuestionResponse(request.id, request.answers);
+      return;
+    }
+
+    case "subAgentConfigResponse": {
+      handleSubAgentConfigResponse(request);
+      return;
+    }
+
+    case "subAgentReviewResponse": {
+      handleSubAgentReviewResponse(request.id, request.action);
+      return;
+    }
+
     case "compact":
       await runCompact();
+      return;
+
+    case "session":
+      if (request.action === "new") {
+        await startNewSession();
+      } else {
+        if (!request.sessionId) throw new Error("A session id is required to resume a conversation.");
+        await resumeSession(request.sessionId);
+      }
       return;
 
     case "goal":
@@ -794,15 +1467,15 @@ async function handle(request: EngineRequest): Promise<void> {
       await mcp?.disconnectAll().catch(() => {});
       mcp = undefined;
       denyAllPending("Engine shutting down; pending approvals were denied.");
+      await Promise.allSettled([...subAgentRuns.values()]);
+      await worktrees.cleanupAll();
       process.exit(0);
       return;
     }
 
     case "reset": {
       denyAllPending("Session reset; pending approvals were denied.");
-      await buildAgent();
-      post({ type: "status", status: "ready" });
-      reportUsage();
+      await startNewSession();
       return;
     }
   }

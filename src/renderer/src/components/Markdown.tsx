@@ -1,6 +1,8 @@
-import { memo } from "react";
+import { Children, isValidElement, memo, useState } from "react";
+import type { ReactElement, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Check, Copy } from "lucide-react";
 import { cn } from "../lib/utils";
 
 /**
@@ -95,12 +97,8 @@ const COMPONENTS = {
 
   // The `pre > code` overrides undo the inline-code pill inside fenced blocks —
   // otherwise every block would render as one long highlighted chip.
-  pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="my-3 overflow-x-auto rounded-lg border border-line bg-background p-3 font-mono text-xs leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-xs [&>code]:text-foreground/90">
-      {children}
-    </pre>
-  ),
-  code: ({ children, className }: { children?: React.ReactNode; className?: string }) => (
+  pre: ({ children }: { children?: ReactNode }) => <CodeBlock>{children}</CodeBlock>,
+  code: ({ children, className }: { children?: ReactNode; className?: string }) => (
     <code
       className={
         className
@@ -166,3 +164,93 @@ const COMPONENTS = {
     />
   ),
 };
+
+function CodeBlock({ children }: { children?: ReactNode }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const child = Children.toArray(children).find(isValidElement) as
+    | ReactElement<{ className?: string; children?: ReactNode }>
+    | undefined;
+  const code = child?.props.children;
+  const source = typeof code === "string" ? code.replace(/\n$/, "") : "";
+  const language = child?.props.className?.match(/language-([\w-]+)/)?.[1]?.toLowerCase() ?? "";
+
+  const copyCode = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(source);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="group/code relative my-3 overflow-hidden rounded-lg border border-line bg-background">
+      <div className="flex h-8 items-center justify-between border-b border-line px-3">
+        <span className="font-mono text-[10px] text-muted-foreground">{language || "código"}</span>
+        <button
+          type="button"
+          onClick={() => void copyCode()}
+          aria-label={copied ? "Código copiado" : "Copiar código"}
+          title={copied ? "Copiado" : "Copiar código"}
+          className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+        >
+          {copied ? <Check className="h-3 w-3 text-chart-5" /> : <Copy className="h-3 w-3" />}
+          {copied ? "Copiado" : "Copiar"}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 font-mono text-xs leading-relaxed">
+        <code>{highlightCode(source, language)}</code>
+      </pre>
+    </div>
+  );
+}
+
+const KEYWORDS: Record<string, Set<string>> = {
+  javascript: new Set("async await break case catch class const continue debugger default delete do else export extends finally for from function if import in instanceof let new of return super switch this throw try typeof var void while with yield".split(" ")),
+  typescript: new Set("abstract any as asserts async await boolean break case catch class const constructor continue declare default delete do else enum export extends finally for from function if implements import in infer instanceof interface is keyof let module namespace never new number object of package private protected public readonly require return set static string super switch symbol this throw type typeof undefined unique unknown var void while yield".split(" ")),
+  python: new Set("and as assert async await break class continue def del elif else except exec finally for from global if import in is lambda nonlocal not or pass print raise return try while with yield".split(" ")),
+  java: new Set("abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while".split(" ")),
+  bash: new Set("case do done elif else esac fi for function if in select then time until while".split(" ")),
+  rust: new Set("as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type union unsafe use where while".split(" ")),
+  go: new Set("break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var".split(" ")),
+};
+
+/** Lightweight lexical highlighting for common languages, with plain-text fallback. */
+function highlightCode(source: string, language: string): ReactNode[] | string {
+  const normalized = ({
+    ts: "typescript",
+    tsx: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    py: "python",
+    sh: "bash",
+    shell: "bash",
+  } as Record<string, string>)[language] ?? language;
+  const keywords = KEYWORDS[normalized] ?? KEYWORDS[language];
+  const supported = Boolean(keywords) || ["json", "css", "html", "xml", "sql", "yaml", "yml", "sh", "shell", "py"].includes(language);
+  if (!supported) return source;
+
+  const hasHashComments = ["python", "py", "bash", "sh", "shell", "yaml", "yml"].includes(language);
+  const tokenPattern = hasHashComments
+    ? /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$-]*|\s+|.)/g
+    : /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$-]*|\s+|.)/g;
+  const tokens = source.match(tokenPattern) ?? [];
+  const rendered: ReactNode[] = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    const next = tokens.slice(index + 1).find((part) => part.trim());
+    let color = "";
+    if (/^(\/\/|\/\*|<!--)/.test(token) || (hasHashComments && token.startsWith("#"))) {
+      color = "text-muted-foreground";
+    }
+    else if (/^(?:\"|'|`)/.test(token)) color = "text-chart-5";
+    else if (/^\d/.test(token)) color = "text-chart-3";
+    else if (/^(?:true|false|null|undefined|None|True|False|nil|NaN)$/.test(token)) color = "text-chart-2";
+    else if (keywords?.has(token) || (["json", "css"].includes(language) && next === ":")) color = "text-primary";
+    else if (/^[A-Za-z_$][\w$-]*$/.test(token) && next === "(") color = "text-chart-4";
+    if (color) rendered.push(<span key={index} className={color}>{token}</span>);
+    else rendered.push(token);
+  }
+  return rendered;
+}

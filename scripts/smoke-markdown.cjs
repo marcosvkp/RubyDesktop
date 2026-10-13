@@ -86,7 +86,8 @@ async function check(api) {
   send({ type: "event", event: { type: "text", text: "escrevendo" } });
   await new Promise((r) => setTimeout(r, 300));
   const caret = await api.readDom(`(() => {
-    const root = document.querySelector(".markdown");
+    const roots = [...document.querySelectorAll(".markdown")];
+    const root = roots[roots.length - 1];
     if (!root) return { present: false };
     const last = root.lastElementChild;
     if (!last) return { present: false };
@@ -183,9 +184,35 @@ async function check(api) {
     api.log(`ok: ${label}`);
   }
 
+  const statsReady = await api.readDom(`(() => {
+    const ids = ["session", "tokens", "cache", "context"];
+    return ids.every((id) => document.querySelector('[data-testid="chat-stat-' + id + '"]'));
+  })()`);
+  if (!statsReady) throw new Error("one or more selectable chat statistics are missing");
+  for (const id of ["session", "tokens", "cache", "context"]) {
+    await api.readDom(`document.querySelector('[data-testid="chat-stat-${id}"]').click()`);
+    await new Promise((r) => setTimeout(r, 80));
+    const dialog = await api.readDom(`document.querySelector('[data-testid="chat-stat-${id}"]')?.getAttribute("aria-expanded") === "true" && Boolean(document.querySelector('[role="dialog"]'))`);
+    if (!dialog) throw new Error(`chat statistic '${id}' did not open its details`);
+    api.log(`ok: ${id} statistics are selectable`);
+    await api.readDom(`document.querySelector('[data-testid="chat-stat-${id}"]').click()`);
+  }
+
+  await api.readDom(`(() => [...document.querySelectorAll('button')].find((button) => button.getAttribute("aria-haspopup") === "dialog" && button.textContent.includes("Spark"))?.click())()`);
+  await new Promise((r) => setTimeout(r, 80));
+  const modelPicker = await api.readDom(`(() => ({
+    open: Boolean([...document.querySelectorAll('[role="dialog"]')].find((dialog) => dialog.getAttribute("aria-label") === "Selecionar modelo")),
+    options: document.querySelectorAll('[role="listbox"] [role="option"]').length,
+  }))()`);
+  if (!modelPicker.open || modelPicker.options === 0) {
+    throw new Error(`model picker did not open with available models: ${JSON.stringify(modelPicker)}`);
+  }
+  api.log(`ok: model picker is selectable (${modelPicker.options} models)`);
+  await api.readDom(`document.querySelector('[role="dialog"][aria-label="Selecionar modelo"]')?.parentElement?.querySelector('button[aria-haspopup="dialog"]')?.click()`);
+
   if (SHOT) {
     // Scroll to the top so the screenshot shows the beginning of the message.
-    await api.readDom(`document.querySelector('.overflow-y-auto')?.scrollTo(0, 0)`);
+    await api.readDom(`document.querySelector('[data-testid="chat-scroll"]')?.scrollTo(0, 0)`);
     await new Promise((r) => setTimeout(r, 300));
     await api.screenshot(SHOT);
   }

@@ -2,30 +2,35 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { useStore } from "../store";
 import { cn } from "../lib/utils";
+import { ChatStats } from "./ChatStats";
+import { ModelPicker } from "./ModelPicker";
+import { getSlashSuggestions } from "../slash-commands";
 
-/**
- * Prompt input.
- *
- * Enter sends, Shift+Enter inserts a newline — the convention every other agent
- * UI uses, so it needs no explanation in the interface. The textarea grows with
- * its content up to a cap, then scrolls.
- */
+/** Prompt composer with model selection and session telemetry kept in the chat. */
 export function Composer(): React.JSX.Element {
   const send = useStore((s) => s.send);
   const abort = useStore((s) => s.abort);
   const busy = useStore((s) => s.busy);
   const status = useStore((s) => s.status);
+  const skills = useStore((s) => s.skills);
   const [text, setText] = useState("");
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [suggestionsHidden, setSuggestionsHidden] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
-
   const disabled = status !== "ready" && status !== "busy";
+  const suggestions = getSlashSuggestions(text, skills);
+  const showSuggestions = !busy && !suggestionsHidden && suggestions.length > 0;
 
-  // Auto-grow: reset to auto first so the box can shrink again after sending.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [text]);
+
+  useEffect(() => {
+    setActiveSuggestion(0);
+    setSuggestionsHidden(false);
   }, [text]);
 
   function submit(): void {
@@ -34,13 +39,64 @@ export function Composer(): React.JSX.Element {
     setText("");
   }
 
+  function completeSuggestion(index = activeSuggestion): void {
+    const suggestion = suggestions[index];
+    if (!suggestion) return;
+    setText(`${suggestion.value} `);
+    setSuggestionsHidden(false);
+    ref.current?.focus();
+  }
+
   return (
-    <div className="shrink-0 border-t border-line bg-page px-6 py-4">
-      <div className="mx-auto max-w-3xl">
+    <div className="shrink-0 border-t border-line bg-page px-6 pt-3 pb-2">
+      <div className="relative mx-auto max-w-3xl">
+        {showSuggestions && (
+          <div
+            id="slash-suggestions"
+            role="listbox"
+            aria-label="Comandos e Skills"
+            className="absolute right-0 bottom-full left-0 z-30 mb-2 max-h-64 overflow-y-auto rounded-xl border border-line bg-card p-1.5 shadow-xl shadow-black/30"
+          >
+            <div className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Comandos e Skills
+            </div>
+            {suggestions.map((suggestion, index) => (
+              <button
+                key={suggestion.value}
+                type="button"
+                id={`slash-option-${index}`}
+                role="option"
+                aria-selected={index === activeSuggestion}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => completeSuggestion(index)}
+                className={cn(
+                  "flex w-full items-center justify-between gap-4 rounded-lg px-2.5 py-2 text-left transition-colors",
+                  index === activeSuggestion
+                    ? "bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:bg-background hover:text-foreground",
+                )}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-mono text-xs text-foreground">
+                    {suggestion.value}
+                  </span>
+                  <span className="block truncate text-[11px]">{suggestion.description}</span>
+                </span>
+                <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                  {suggestion.kind === "skill" ? "Skill" : "Comando"}
+                </span>
+              </button>
+            ))}
+            <div className="px-2.5 pt-1.5 pb-1 text-[10px] text-muted-foreground">
+              ↑↓ navegar <span className="px-1 text-border">·</span> Tab completar
+              <span className="px-1 text-border">·</span> Enter selecionar ou enviar
+            </div>
+          </div>
+        )}
         <div
           className={cn(
-            "flex items-end gap-2 rounded-lg border bg-card px-3 py-2 transition-colors",
-            disabled ? "border-border opacity-60" : "border-border focus-within:border-ring",
+            "rounded-2xl border bg-card shadow-lg shadow-black/10 transition-colors",
+            disabled ? "border-border opacity-60" : "border-border focus-within:border-ring/60",
           )}
         >
           <textarea
@@ -48,45 +104,79 @@ export function Composer(): React.JSX.Element {
             rows={1}
             value={text}
             disabled={disabled}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
+            aria-label="Mensagem para o agente"
+            aria-autocomplete="list"
+            aria-controls={showSuggestions ? "slash-suggestions" : undefined}
+            aria-activedescendant={showSuggestions ? `slash-option-${activeSuggestion}` : undefined}
+            aria-expanded={showSuggestions}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (showSuggestions && event.key === "ArrowDown") {
+                event.preventDefault();
+                setActiveSuggestion((index) => (index + 1) % suggestions.length);
+                return;
+              }
+              if (showSuggestions && event.key === "ArrowUp") {
+                event.preventDefault();
+                setActiveSuggestion((index) => (index - 1 + suggestions.length) % suggestions.length);
+                return;
+              }
+              if (showSuggestions && event.key === "Tab") {
+                event.preventDefault();
+                completeSuggestion();
+                return;
+              }
+              if (showSuggestions && event.key === "Escape") {
+                event.preventDefault();
+                setSuggestionsHidden(true);
+                return;
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
+                const exact = suggestions.some((suggestion) => suggestion.value === text.trim());
+                if (showSuggestions && !exact) {
+                  event.preventDefault();
+                  completeSuggestion();
+                  return;
+                }
+                event.preventDefault();
                 submit();
               }
             }}
-            placeholder={
-              disabled ? "Waiting for the engine…" : "Describe what you want done in this project…"
-            }
-            className="max-h-[200px] flex-1 resize-none bg-transparent py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+            placeholder={disabled ? "Aguardando o agente…" : "Descreva uma tarefa ou faça uma pergunta…"}
+            className="block max-h-[200px] min-h-12 w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
 
-          {busy ? (
-            <button
-              type="button"
-              onClick={abort}
-              title="Stop"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground"
-            >
-              <Square className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={submit}
-              disabled={disabled || !text.trim()}
-              title="Send"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-30"
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
-          )}
+          <div className="flex items-center gap-2 px-3 pb-2.5">
+            <span className="flex-1 pl-1 text-[10px] text-muted-foreground">
+              Enter envia <span className="px-1 text-border">·</span> Shift+Enter quebra a linha
+            </span>
+            <ModelPicker />
+            {busy ? (
+              <button
+                type="button"
+                onClick={abort}
+                title="Parar o turno"
+                aria-label="Parar o turno"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line bg-background text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+              >
+                <Square className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={disabled || !text.trim()}
+                title="Enviar mensagem"
+                aria-label="Enviar mensagem"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/20 transition-all hover:-translate-y-0.5 hover:opacity-90 disabled:translate-y-0 disabled:opacity-30 disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="mt-1.5 flex items-center justify-between px-1 text-[10px] text-muted-foreground">
-          <span>Enter to send · Shift+Enter for a new line</span>
-          <span className="font-mono">{status}</span>
-        </div>
+        <ChatStats />
       </div>
     </div>
   );

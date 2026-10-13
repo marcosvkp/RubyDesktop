@@ -97,20 +97,20 @@ runScenario({
         if (!modal.text.includes(message.request.toolName)) {
           return api.finish(1, `modal does not name the tool '${message.request.toolName}'`);
         }
-        if (!modal.buttons.includes("Allow once") || !modal.buttons.includes("Deny")) {
-          return api.finish(1, "modal is missing the Allow once / Deny buttons");
+        if (!modal.buttons.includes("Permitir uma vez") || !modal.buttons.includes("Negar")) {
+          return api.finish(1, "modal is missing the Permitir uma vez / Negar buttons");
         }
 
         const phase = state.phase;
         if (phase === PHASE.ALLOW) {
           if (SHOT_MODAL) await api.screenshot(SHOT_MODAL);
-          const clicked = await api.clickButton("Allow once");
+          const clicked = await api.clickButton("Permitir uma vez");
           api.log(`clicked: ${clicked}`);
-          if (clicked !== "Allow once") return api.finish(1, "could not click Allow once");
+          if (clicked !== "Permitir uma vez") return api.finish(1, "could not click Permitir uma vez");
         } else if (phase === PHASE.DENY) {
-          const clicked = await api.clickButton("Deny");
+          const clicked = await api.clickButton("Negar");
           api.log(`clicked: ${clicked}`);
-          if (clicked !== "Deny") return api.finish(1, "could not click Deny");
+          if (clicked !== "Negar") return api.finish(1, "could not click Negar");
         } else {
           return api.finish(1, `unexpected approval request during phase ${phase}`);
         }

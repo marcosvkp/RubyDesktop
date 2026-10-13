@@ -10,17 +10,16 @@
     "dev": "npm run build:engine && electron-vite dev",
     "build:engine": "vite build --config vite.engine.config.ts && node scripts/copy-skills.mjs",
     "build": "npm run typecheck && npm run build:engine && electron-vite build",
+    "dist": "npm run build && electron-builder --config electron-builder.config.cjs --publish never",
+    "package:dir": "npm run build && electron-builder --config electron-builder.config.cjs --dir --publish never",
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web"
   },
-  "dependencies": {
-    "@rubyclii/cli": "file:../RubyCLI",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
-  },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
+    "@rubyclii/cli": "file:../RubyCLI",
     "@swc/core": "^1.16.13",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.3.0",
@@ -29,14 +28,20 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "lucide-react": "^1.55.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.7.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
     "vite": "^7.3.7",
     "zustand": "^5.0.15"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

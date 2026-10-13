@@ -55,17 +55,17 @@ export function ApprovalModal(): React.JSX.Element | null {
         <header className="flex items-center gap-2 border-b border-line px-5 py-3">
           <span className="h-1.5 w-1.5 rounded-full bg-chart-3" />
           <h2 id="approval-title" className="text-sm font-medium text-foreground">
-            Permission required
+            Ação requer permissão
           </h2>
           <span className="flex-1" />
           <span className="font-mono text-[11px] text-muted-foreground">
-            {approval.mcpServer ? `MCP · ${approval.mcpServer}` : "local tool"}
+            {approval.mcpServer ? `MCP · ${approval.mcpServer}` : "ferramenta local"}
           </span>
         </header>
 
         <div className="flex flex-col gap-3 px-5 py-4">
           <p className="text-sm text-muted-foreground">
-            The agent wants to run{" "}
+            O agente quer executar{" "}
             <span className="font-mono text-foreground">{approval.toolName}</span>
           </p>
 
@@ -80,7 +80,7 @@ export function ApprovalModal(): React.JSX.Element | null {
             onClick={() => setShowArgs((v) => !v)}
             className="self-start text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           >
-            {showArgs ? "Hide" : "Show"} all arguments
+            {showArgs ? "Ocultar" : "Mostrar"} todos os argumentos
           </button>
 
           {showArgs ? (
@@ -97,7 +97,7 @@ export function ApprovalModal(): React.JSX.Element | null {
             onClick={() => answer("allow", "once")}
             className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus:ring-2 focus:ring-ring focus:outline-none"
           >
-            Allow once
+            Permitir uma vez
           </button>
 
           <button
@@ -105,7 +105,7 @@ export function ApprovalModal(): React.JSX.Element | null {
             onClick={() => answer("allow", "project", "exact")}
             className="rounded-md border border-line px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-white/5 focus:ring-2 focus:ring-ring focus:outline-none"
           >
-            Allow this call, always
+            Permitir sempre esta chamada
           </button>
 
           <button
@@ -113,7 +113,7 @@ export function ApprovalModal(): React.JSX.Element | null {
             onClick={() => answer("allow", "project", "toolWide")}
             className="rounded-md border border-line px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-white/5 focus:ring-2 focus:ring-ring focus:outline-none"
           >
-            Always allow {approval.toolName}
+            Sempre permitir {approval.toolName}
           </button>
 
           {approval.grantKeys.mcpServerWide ? (
@@ -122,7 +122,7 @@ export function ApprovalModal(): React.JSX.Element | null {
               onClick={() => answer("allow", "project", "mcpServerWide")}
               className="rounded-md border border-line px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-white/5 focus:ring-2 focus:ring-ring focus:outline-none"
             >
-              Always allow {approval.mcpServer}
+              Sempre permitir {approval.mcpServer}
             </button>
           ) : null}
 
@@ -131,10 +131,10 @@ export function ApprovalModal(): React.JSX.Element | null {
           <button
             type="button"
             onClick={() => answer("allow", "global", "toolWide")}
-            title="Applies to every workspace, stored in ~/.rubycli/config.json"
+            title="Aplica-se a todos os workspaces e fica em ~/.rubycli/config.json"
             className="rounded-md px-3 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
           >
-            Always allow everywhere
+            Sempre permitir em todos os projetos
           </button>
 
           <button
@@ -145,13 +145,13 @@ export function ApprovalModal(): React.JSX.Element | null {
               "transition-colors hover:bg-destructive/10 focus:ring-2 focus:ring-ring focus:outline-none",
             )}
           >
-            Deny
+            Negar
           </button>
         </footer>
 
         <p className="border-t border-line px-5 py-2 text-[10px] text-muted-foreground">
-          Grants live outside the repository, so a project cannot grant itself permission. Deny
-          leaves the turn running — the agent is told the call was blocked and continues.
+          As permissões ficam fora do repositório, então um projeto não pode autorizá-las por conta própria.
+          Ao negar, o agente recebe o bloqueio e pode continuar o turno.
         </p>
       </div>
     </div>

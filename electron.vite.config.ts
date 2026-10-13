@@ -14,6 +14,9 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    define: {
+      __RUBY_DESKTOP_MAC_AUTO_UPDATES__: JSON.stringify(Boolean(process.env.CSC_LINK || process.env.CSC_NAME)),
+    },
     build: {
       rollupOptions: {
         input: {

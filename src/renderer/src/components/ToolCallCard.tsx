@@ -23,6 +23,14 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
       : item.status === "ok"
         ? "text-chart-5"
         : "text-destructive";
+  const statusLabel =
+    item.status === "running"
+      ? "em andamento"
+      : item.status === "ok"
+        ? "concluído"
+        : item.status === "denied"
+          ? "negado"
+          : "falhou";
 
   const args = formatArgs(item.args);
 
@@ -31,6 +39,7 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/[0.03]"
       >
         <ChevronRight
@@ -50,7 +59,7 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
         <StatusIcon
           className={cn("h-3.5 w-3.5 shrink-0", statusColor, item.status === "running" && "animate-spin")}
         />
-        <span className={cn("text-[10px] tracking-wide uppercase", statusColor)}>{item.status}</span>
+        <span className={cn("text-[10px] tracking-wide", statusColor)}>{statusLabel}</span>
       </button>
 
       {open ? (
@@ -65,7 +74,7 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
               {item.result}
             </pre>
           ) : (
-            <div className="px-3 py-2 font-mono text-[11px] text-muted-foreground">running…</div>
+            <div className="px-3 py-2 font-mono text-[11px] text-muted-foreground">em andamento…</div>
           )}
         </div>
       ) : null}

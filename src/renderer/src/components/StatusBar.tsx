@@ -1,15 +1,12 @@
 import { useStore, PERMISSION_MODE_LABEL } from "../store";
-import { cn, formatTokens } from "../lib/utils";
+import { cn } from "../lib/utils";
 import type { PermissionMode } from "@shared/ipc";
 
 const MODES: PermissionMode[] = ["normal", "acceptEdits", "plan"];
 
 /**
- * Bottom status strip: engine state, permission mode, compaction and the context meter.
- *
- * The meter exists from M1 because it is the visible half of compaction: the
- * engine auto-compacts at 75% of the window, so the user needs to see that
- * threshold approaching rather than be surprised by it.
+ * Bottom strip for always-on engine and permission controls. Per-conversation
+ * statistics now live next to the composer where their details are selectable.
  *
  * The permission mode sits here rather than in a settings dialog because it is a
  * *mode*: it changes what the agent may do without asking, so it should be visible
@@ -24,18 +21,11 @@ export function StatusBar({
 }): React.JSX.Element {
   const status = useStore((s) => s.status);
   const used = useStore((s) => s.contextUsed);
-  const window_ = useStore((s) => s.contextWindow);
   const permissionMode = useStore((s) => s.permissionMode);
   const setPermissionMode = useStore((s) => s.setPermissionMode);
   const compacting = useStore((s) => s.compacting);
   const compact = useStore((s) => s.compact);
   const busy = useStore((s) => s.busy);
-
-  const ratio = window_ > 0 ? Math.min(used / window_, 1) : 0;
-  const percent = Math.round(ratio * 100);
-
-  // Green -> amber -> red as the window fills, matching the chart palette.
-  const barColor = ratio >= 0.75 ? "bg-destructive" : ratio >= 0.6 ? "bg-chart-3" : "bg-chart-5";
 
   const dotColor =
     status === "ready"
@@ -45,24 +35,27 @@ export function StatusBar({
         : status === "error"
           ? "bg-destructive"
           : "bg-muted-foreground";
+  const statusLabel =
+    status === "ready" ? "pronto" : status === "busy" ? "trabalhando" : status === "starting" ? "iniciando" : status === "error" ? "erro" : "parado";
 
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-line bg-background px-4 text-[11px] text-muted-foreground">
+    <footer className="flex h-9 shrink-0 items-center gap-3 border-t border-line bg-background px-4 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
         <span className={cn("h-1.5 w-1.5 rounded-full", dotColor)} />
-        <span className="font-mono">{status}</span>
+        <span className="font-mono">{statusLabel}</span>
       </span>
 
-      <span className="flex items-center gap-1" title="Permission mode — /mode ask | edits | plan">
+      <span className="flex items-center gap-1 rounded-md border border-line bg-card p-0.5" title="Modo de permissão — /mode ask | edits | plan" aria-label="Modo de permissão">
         {MODES.map((mode) => (
           <button
             key={mode}
             type="button"
             onClick={() => setPermissionMode(mode)}
+            aria-pressed={permissionMode === mode}
             className={cn(
-              "rounded px-1.5 py-0.5 transition-colors",
+              "rounded px-2 py-1 text-[11px] transition-colors",
               permissionMode === mode
-                ? "bg-sidebar-accent text-foreground"
+                ? "bg-primary/15 text-foreground"
                 : "hover:bg-white/5 hover:text-foreground",
             )}
           >
@@ -75,16 +68,17 @@ export function StatusBar({
         type="button"
         onClick={compact}
         disabled={busy || compacting || used === 0}
-        title="Summarize older messages now (/compact)"
+        title="Resumir mensagens antigas agora (/compact)"
         className="rounded px-1.5 py-0.5 transition-colors hover:bg-white/5 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
       >
-        {compacting ? "compacting…" : "compact"}
+        {compacting ? "Resumindo…" : "Resumir"}
       </button>
 
       <button
         type="button"
         onClick={onToggleOutput}
-        title="Agent output panel (Ctrl+`)"
+        title="Painel de atividade do agente (Ctrl+`)"
+        aria-pressed={outputOpen}
         className={cn(
           "rounded px-1.5 py-0.5 transition-colors",
           outputOpen
@@ -92,25 +86,11 @@ export function StatusBar({
             : "hover:bg-white/5 hover:text-foreground",
         )}
       >
-        output
+        Atividade
       </button>
 
       <span className="flex-1" />
 
-      {window_ > 0 ? (
-        <span className="flex items-center gap-2" title="Context window usage">
-          <span className="font-mono">
-            {formatTokens(used)} / {formatTokens(window_)}
-          </span>
-          <span className="h-1 w-24 overflow-hidden rounded-full bg-white/10">
-            <span
-              className={cn("block h-full rounded-full transition-all", barColor)}
-              style={{ width: `${percent}%` }}
-            />
-          </span>
-          <span className="w-8 text-right font-mono">{percent}%</span>
-        </span>
-      ) : null}
     </footer>
   );
 }

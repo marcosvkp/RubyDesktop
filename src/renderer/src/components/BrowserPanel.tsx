@@ -67,14 +67,14 @@ export function BrowserPanel({ onClose }: { onClose: () => void }): React.JSX.El
           <input
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder={browser.url && browser.url !== "about:blank" ? browser.url : "Enter a URL"}
+            placeholder={browser.url && browser.url !== "about:blank" ? browser.url : "Digite uma URL"}
             className="w-full rounded border border-line bg-page px-2 py-1 font-mono text-[11px] text-foreground outline-none focus:border-ring"
           />
         </form>
         <button
           type="button"
           onClick={() => browser.url && window.ruby.openBrowser(browser.url)}
-          title="Reload"
+          title="Recarregar"
           className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
           <RotateCw className="h-3 w-3" />
@@ -82,7 +82,7 @@ export function BrowserPanel({ onClose }: { onClose: () => void }): React.JSX.El
         <button
           type="button"
           onClick={onClose}
-          title="Close the browser"
+          title="Fechar navegador"
           className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
@@ -119,7 +119,7 @@ export function BrowserHiddenNotice({ onShow }: { onShow: () => void }): React.J
     <div className="flex items-center gap-3 border-b border-chart-4/40 bg-chart-4/5 px-5 py-2">
       <Globe className="h-3.5 w-3.5 shrink-0 text-chart-4" />
       <p className="flex-1 truncate text-xs text-foreground/90">
-        The agent is using the browser{browser.url && browser.url !== "about:blank" ? `: ${browser.url}` : ""}
+        O agente está usando o navegador{browser.url && browser.url !== "about:blank" ? `: ${browser.url}` : ""}
       </p>
       <button
         type="button"
@@ -129,7 +129,7 @@ export function BrowserHiddenNotice({ onShow }: { onShow: () => void }): React.J
           "transition-colors hover:bg-white/5",
         )}
       >
-        Show
+        Mostrar
       </button>
     </div>
   );

@@ -262,10 +262,14 @@ function runScenario({
     ipcMain.handle("ruby:get-workspace", () => workspace);
     ipcMain.handle("ruby:get-engine-info", () => undefined);
     ipcMain.handle("ruby:pick-workspace", () => undefined);
+    ipcMain.handle("ruby:save-api-key", async () => ({ ok: false, error: "Unavailable in smoke harness." }));
 
     // The fire-and-forget channels, mirroring src/main/index.ts. A channel missing
     // here would make the smoke test pass while the real app was broken.
     ipcMain.on("ruby:prompt", (_e, text) => engine?.postMessage({ type: "prompt", text }));
+    ipcMain.on("ruby:activate-skill", (_e, name, args) =>
+      engine?.postMessage({ type: "activateSkill", name, args }),
+    );
     ipcMain.on("ruby:abort", () => engine?.postMessage({ type: "abort" }));
     ipcMain.on("ruby:set-workspace", () => {});
     ipcMain.on("ruby:set-model", (_e, model) => engine?.postMessage({ type: "setModel", model }));
@@ -275,7 +279,20 @@ function runScenario({
     ipcMain.on("ruby:approval-response", (_e, id, decision, scope, grantKey) =>
       engine?.postMessage({ type: "approvalResponse", id, decision, scope, grantKey }),
     );
+    ipcMain.on("ruby:user-question-response", (_e, id, answers) =>
+      engine?.postMessage({ type: "userQuestionResponse", id, answers }),
+    );
+    ipcMain.on("ruby:sub-agent-config-response", (_e, id, action, config) =>
+      engine?.postMessage({ type: "subAgentConfigResponse", id, action, ...config }),
+    );
+    ipcMain.on("ruby:sub-agent-review-response", (_e, id, action) =>
+      engine?.postMessage({ type: "subAgentReviewResponse", id, action }),
+    );
     ipcMain.on("ruby:compact", () => engine?.postMessage({ type: "compact" }));
+    ipcMain.on("ruby:new-session", () => engine?.postMessage({ type: "session", action: "new" }));
+    ipcMain.on("ruby:resume-session", (_e, sessionId) =>
+      engine?.postMessage({ type: "session", action: "resume", sessionId }),
+    );
     ipcMain.on("ruby:get-goal", () => engine?.postMessage({ type: "goal", action: "get" }));
     ipcMain.on("ruby:set-goal", (_e, text) =>
       engine?.postMessage({ type: "goal", action: "set", text }),

@@ -9,6 +9,7 @@ import { ApprovalModal } from "./components/ApprovalModal";
 import { OutputPanel } from "./components/OutputPanel";
 import { McpPanel } from "./components/McpPanel";
 import { BrowserPanel, BrowserHiddenNotice } from "./components/BrowserPanel";
+import { SettingsModal } from "./components/SettingsModal";
 import { useStore } from "./store";
 
 export function App(): React.JSX.Element {
@@ -22,6 +23,7 @@ export function App(): React.JSX.Element {
   // when the user asks for it. Kept separate from the engine's own state so
   // hiding the panel does not close the page the agent is working with.
   const [showBrowser, setShowBrowser] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Read the workspace once for the initial paint; the engine's `ready` message
   // confirms it a moment later.
@@ -59,7 +61,7 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      <TitleBar />
+      <TitleBar onOpenSettings={() => setShowSettings(true)} />
       <div className="flex min-h-0 flex-1">
         <Sidebar
           workspace={workspace}
@@ -81,6 +83,7 @@ export function App(): React.JSX.Element {
         </main>
         {showMcp ? <McpPanel onClose={() => setShowMcp(false)} /> : null}
         {showBrowser ? <BrowserPanel onClose={closeBrowserPanel} /> : null}
+      {showSettings ? <SettingsModal onClose={() => setShowSettings(false)} /> : null}
       </div>
       <StatusBar
         outputOpen={showOutput}
@@ -106,8 +109,8 @@ function FatalBanner({
 }): React.JSX.Element {
   return (
     <div className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 px-5 py-3">
-      <span className="mt-0.5 text-xs font-semibold tracking-wide text-destructive uppercase">
-        Engine
+        <span className="mt-0.5 text-xs font-semibold tracking-wide text-destructive uppercase">
+          Agente
       </span>
       <p className="flex-1 text-sm text-foreground/90">{message}</p>
       <button
@@ -115,7 +118,7 @@ function FatalBanner({
         onClick={onDismiss}
         className="rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
       >
-        Dismiss
+        Fechar aviso
       </button>
     </div>
   );
