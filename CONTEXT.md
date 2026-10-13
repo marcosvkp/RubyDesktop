@@ -132,15 +132,18 @@ a engine do repositório próprio no GitHub, sem depender da publicação no npm
 
 - `electron-builder` 26 empacota NSIS x64, arm64 e um instalador combinado que detecta a arquitetura;
   o engine vai em `resources/engine` fora do ASAR para `utilityProcess` abrir um arquivo real.
-- `electron-updater` está incluído como dependência de runtime. O updater só inicia quando o pacote
-  contém `app-update.yml`; verificação de assinatura do instalador Windows continua habilitada.
+- `electron-updater` está incluído como dependência de runtime. Pacotes com `app-update.yml` usam
+  download e instalação automáticos; pacotes sem feed consultam a última release pública no GitHub
+  e oferecem abrir a página de download. A verificação de assinatura do instalador Windows continua
+  habilitada.
 - GitHub Actions tem CI Windows (inclui build/testes determinísticos do RubyCLI, typecheck/build e
   verificação do pacote) e workflow de release em runners Windows, Linux e macOS. A release
   `v0.1.0` foi publicada com sucesso; os três builds de plataforma e a coleta dos artefatos passaram.
 - Linux publica AppImage/deb com feed de atualização. Esta release também inclui os metadados
-  `latest*.yml` das três plataformas, mas Windows e macOS estão sem assinatura de código; o
-  funcionamento do auto-update nesses sistemas não deve ser considerado validado. Windows pode
-  mostrar alerta de editor desconhecido.
+  `latest*.yml` das três plataformas. Linux usa o feed automático; Windows e macOS sem assinatura
+  verificam releases no GitHub e encaminham para o download manual. O auto-update instalável do
+  Windows/macOS depende da configuração de assinatura. Windows pode mostrar alerta de editor
+  desconhecido.
 - Foram publicados instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS x64/arm64
   DMG/ZIP. Os builds macOS/Linux passaram na CI, mas não foram executados interativamente neste host.
 
@@ -164,8 +167,9 @@ com `release_tag` também pode atualizar uma release já publicada e substituir 
 
 Segredos opcionais de assinatura: `WIN_CSC_LINK` e `WIN_CSC_KEY_PASSWORD` para Windows;
 `CSC_LINK` e `CSC_KEY_PASSWORD` para macOS. Para notarização macOS, também configure `APPLE_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Não são necessários para gerar os pacotes, mas
-Windows/macOS ficam sem atualização automática quando a assinatura não está configurada.
+`APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Não são necessários para gerar os pacotes; sem
+assinatura, Windows/macOS oferecem a verificação e o download manual da release, sem instalação
+automática.
 
 ---
 

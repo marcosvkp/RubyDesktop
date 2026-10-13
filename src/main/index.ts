@@ -38,6 +38,11 @@ import { IPC } from "@shared/ipc";
 
 declare const __RUBY_DESKTOP_MAC_AUTO_UPDATES__: boolean;
 
+const RELEASES_API_URL =
+  "https://api.github.com/repos/marcosvkp/RubyDesktop/releases/latest";
+const RELEASES_PAGE_URL =
+  "https://github.com/marcosvkp/RubyDesktop/releases/latest";
+
 /**
  * The workspace the engine operates in.
  *
@@ -137,20 +142,129 @@ function engineEntry(): string {
   return join(__dirname, "..", "engine", "index.mjs");
 }
 
-/** Enables updates only for builds that contain a generated GitHub feed config. */
+interface ReleaseVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: boolean;
+}
+
+function parseReleaseVersion(value: string): ReleaseVersion | undefined {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+    value.trim(),
+  );
+  if (!match) return undefined;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: Boolean(match[4]),
+  };
+}
+
+function isReleaseNewer(candidate: ReleaseVersion, installed: ReleaseVersion): boolean {
+  for (const key of ["major", "minor", "patch"] as const) {
+    if (candidate[key] !== installed[key]) {
+      return candidate[key] > installed[key];
+    }
+  }
+  // A stable release supersedes a prerelease with the same numeric version.
+  return installed.prerelease && !candidate.prerelease;
+}
+
+/** Checks the public GitHub Releases API and offers a safe manual update path. */
+async function checkGithubRelease(): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(RELEASES_API_URL, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "RubyDesktop",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub respondeu HTTP ${response.status}.`);
+    }
+
+    const release: unknown = await response.json();
+    if (typeof release !== "object" || release === null) return;
+    const data = release as {
+      tag_name?: unknown;
+      draft?: unknown;
+      prerelease?: unknown;
+    };
+    if (
+      typeof data.tag_name !== "string" ||
+      data.draft === true ||
+      data.prerelease === true
+    )
+      return;
+
+    const latest = parseReleaseVersion(data.tag_name);
+    const installed = parseReleaseVersion(app.getVersion());
+    if (!latest || !installed || !isReleaseNewer(latest, installed)) return;
+
+    const options = {
+      type: "info" as const,
+      title: "Atualização disponível",
+      message: `Ruby Desktop ${data.tag_name} está disponível.`,
+      detail: `Você está usando a versão ${app.getVersion()}. Abra a página de releases para baixar o instalador mais recente.`,
+      buttons: ["Abrir downloads", "Depois"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const result =
+      mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showMessageBox(mainWindow, options)
+        : await dialog.showMessageBox(options);
+    if (result.response === 0) await shell.openExternal(RELEASES_PAGE_URL);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Starts automatic installs when a signed update feed is packaged. Unsigned
+ * builds still check GitHub and direct the user to the verified release page.
+ */
 function startAutoUpdates(): void {
-  if (
-    !app.isPackaged ||
-    !existsSync(join(process.resourcesPath, "app-update.yml"))
-  )
+  if (!app.isPackaged) return;
+
+  const hasUpdateFeed = existsSync(join(process.resourcesPath, "app-update.yml"));
+  const macUpdatesAreSigned =
+    process.platform !== "darwin" || __RUBY_DESKTOP_MAC_AUTO_UPDATES__;
+  if (!hasUpdateFeed || !macUpdatesAreSigned) {
+    setTimeout(() => {
+      void checkGithubRelease().catch((error: unknown) => {
+        console.warn(
+          `[updates] GitHub check failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }, 15_000);
     return;
-  if (process.platform === "darwin" && !__RUBY_DESKTOP_MAC_AUTO_UPDATES__)
-    return;
+  }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  let fallbackScheduled = false;
+  const scheduleGithubFallback = () => {
+    if (fallbackScheduled) return;
+    fallbackScheduled = true;
+    setTimeout(() => {
+      void checkGithubRelease().catch((error: unknown) => {
+        console.warn(
+          `[updates] GitHub fallback failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }, 15_000);
+  };
   autoUpdater.on("error", (error) => {
     console.error(`[updates] ${error.message}`);
+    scheduleGithubFallback();
   });
   autoUpdater.on("update-downloaded", (info) => {
     const options = {
