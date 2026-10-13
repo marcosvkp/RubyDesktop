@@ -52,7 +52,9 @@ import {
   setGoal,
   noteGoal,
   setGoalStatus,
+  setGoalMaxRounds,
   clearGoal,
+  runAutoGoal,
   // MCP: servers are configured in ~/.rubycli/mcp.json and their tools are merged
   // into the same registry the built-in tools live in.
   McpManager,
@@ -71,7 +73,12 @@ import type {
   PermissionMode,
   Provider,
   Message,
+  SessionEntry,
+  SessionLogEntry,
+  SessionUiEvent,
   SpawnSubAgentOptions,
+  WorkflowAgentRequest,
+  WorkflowEvent,
   UserQuestionRequest as AskUserPayload,
   UserQuestionResult,
 } from "@rubyclii/cli";
@@ -92,25 +99,47 @@ import type {
   SkillSummary,
   SubAgentConfigRequest,
   SubAgentSummary,
+  UserQuestionAnswer,
   UserQuestionRequest,
 } from "@shared/ipc";
 import { WorktreeManager } from "./worktrees.js";
 
 // `process.parentPort` is added by Electron's utilityProcess and is not part of
 // the standard Node typings.
-const port = (process as unknown as { parentPort: Electron.ParentPort }).parentPort;
+const port = (process as unknown as { parentPort: Electron.ParentPort })
+  .parentPort;
 
 function post(message: EngineResponse): void {
   port.postMessage(message);
 }
 
+/** Serializes session writes so UI annotations stay between the tool call and result they describe. */
+function logSessionEntry(entry: SessionLogEntry): Promise<void> {
+  const target = session;
+  if (!target) return Promise.resolve();
+  const write = sessionLogQueue.then(() => target.log(entry));
+  sessionLogQueue = write.catch(() => {});
+  return write;
+}
+
+function logSessionUiEvent(event: SessionUiEvent): Promise<void> {
+  return logSessionEntry({ type: "ui_event", event });
+}
+
 /** Report an unexpected failure without killing the process. */
 function fail(err: unknown): void {
-  post({ type: "error", message: err instanceof Error ? err.message : String(err) });
+  post({
+    type: "error",
+    message: err instanceof Error ? err.message : String(err),
+  });
 }
 
 function getSkillSummaries(): SkillSummary[] {
-  return skillRegistry?.list().map(({ name, description }) => ({ name, description })) ?? [];
+  return (
+    skillRegistry
+      ?.list()
+      .map(({ name, description }) => ({ name, description })) ?? []
+  );
 }
 
 // --- Session state ----------------------------------------------------------
@@ -123,6 +152,7 @@ let provider: Provider = "rubycli";
 let agent: Agent | undefined;
 let session: Session | undefined;
 let sessionMessages: Message[] = [];
+let sessionLogQueue: Promise<void> = Promise.resolve();
 let toolCount = 0;
 let skillCount = 0;
 let skillRegistry: SkillRegistry | undefined;
@@ -130,20 +160,30 @@ let modelCatalog: ModelSummary[] = [];
 const worktrees = new WorktreeManager();
 const subAgentControllers = new Map<string, AbortController>();
 const subAgentRuns = new Map<string, Promise<string>>();
-const pendingSubAgentReviews = new Map<string, (action: "merge" | "discard" | "cancel") => void>();
+const persistedSubAgentStatuses = new Map<string, SubAgentSummary["status"]>();
+const pendingSubAgentReviews = new Map<
+  string,
+  (action: "merge" | "discard" | "cancel") => void
+>();
 let activeSubAgentCount = 0;
 const MAX_CONCURRENT_SUBAGENTS = 3;
 let permissionMode: PermissionMode = "normal";
 /** Set by `abort`; the run loop checks it between events. */
 let cancelled = false;
 let running = false;
+let activeTurnController: AbortController | undefined;
+let autoGoalController: AbortController | undefined;
+let autoGoalRunning = false;
 
 /** Tool-call grants: global (config.json) and per-project (project-permissions/). */
 let globalAllowSet = new Set<string>();
 let projectAllowSet = new Set<string>();
 let denyPatterns: string[] = [];
 /** Built from the merged `permissions.ask` patterns; forces a prompt regardless. */
-let forcesConfirmation: (toolName: string, args: Record<string, unknown>) => boolean = () => false;
+let forcesConfirmation: (
+  toolName: string,
+  args: Record<string, unknown>,
+) => boolean = () => false;
 
 // --- Browser ----------------------------------------------------------------
 
@@ -179,7 +219,12 @@ function mcpOpts(): McpClientOpts {
 function toServerConfig(draft: McpServerDraft): McpServerConfig {
   return draft.transport === "http"
     ? { transport: "http", url: draft.url, headers: draft.headers }
-    : { transport: "stdio", command: draft.command, args: draft.args, env: draft.env };
+    : {
+        transport: "stdio",
+        command: draft.command,
+        args: draft.args,
+        env: draft.env,
+      };
 }
 
 /**
@@ -207,12 +252,17 @@ function postMcpStatus(): void {
     toolPrefix: status.sanitisedName,
     connected: status.connected,
     error: status.error,
-    tools: status.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+    tools: status.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+    })),
   }));
   post({ type: "mcp", servers });
 }
 
-async function handleMcp(request: Extract<EngineRequest, { type: "mcp" }>): Promise<void> {
+async function handleMcp(
+  request: Extract<EngineRequest, { type: "mcp" }>,
+): Promise<void> {
   switch (request.action) {
     case "refresh":
       // A full rebuild: the tools have to be registered into the registry the
@@ -223,7 +273,11 @@ async function handleMcp(request: Extract<EngineRequest, { type: "mcp" }>): Prom
       return;
 
     case "add":
-      await saveMcpServer(AGENT_DIR, request.name, toServerConfig(request.config));
+      await saveMcpServer(
+        AGENT_DIR,
+        request.name,
+        toServerConfig(request.config),
+      );
       await buildAgent();
       post({ type: "status", status: "ready" });
       return;
@@ -249,7 +303,10 @@ async function handleMcp(request: Extract<EngineRequest, { type: "mcp" }>): Prom
           toolPrefix: status.sanitisedName,
           connected: status.connected,
           error: status.error,
-          tools: status.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+          tools: status.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+          })),
         },
       });
       return;
@@ -303,7 +360,11 @@ function onObservability(event: ObservabilityEvent, agentId?: string): void {
       };
       break;
     case "compact_failed":
-      line = { kind: "compact", trigger: event.trigger, detail: `failed: ${event.error}` };
+      line = {
+        kind: "compact",
+        trigger: event.trigger,
+        detail: `failed: ${event.error}`,
+      };
       break;
     default:
       // Everything else (call starts, context snapshots, threshold notices) is
@@ -389,16 +450,35 @@ function requestUserQuestion(
       settled = true;
       clearTimeout(timer);
       pendingUserQuestions.delete(id);
+      void logSessionUiEvent({
+        version: 1,
+        kind: "user-question",
+        id,
+        data: {
+          request,
+          status: result.cancelled ? "cancelled" : "answered",
+          ...(!result.cancelled ? { answers: result.answers } : {}),
+        },
+      });
       post({ type: "userQuestionResolved", id, cancelled: result.cancelled });
       resolve(result);
     };
 
     const timer = setTimeout(() => {
-      post({ type: "error", message: `Question from ${agentName} timed out; it was cancelled.` });
+      post({
+        type: "error",
+        message: `Question from ${agentName} timed out; it was cancelled.`,
+      });
       settle({ answers: {}, cancelled: true });
     }, USER_QUESTION_TIMEOUT_MS);
 
     pendingUserQuestions.set(id, { request, settle });
+    void logSessionUiEvent({
+      version: 1,
+      kind: "user-question",
+      id,
+      data: { request, status: "pending" },
+    });
     post({ type: "userQuestionRequest", request });
   });
 }
@@ -414,11 +494,15 @@ function cancelAllUserQuestions(reason: string): void {
 
 function cancelUserQuestionsForAgent(agentId: string): void {
   for (const pending of [...pendingUserQuestions.values()]) {
-    if (pending.request.agentId === agentId) pending.settle({ answers: {}, cancelled: true });
+    if (pending.request.agentId === agentId)
+      pending.settle({ answers: {}, cancelled: true });
   }
 }
 
-function handleUserQuestionResponse(id: string, answers: Record<string, string> | null): void {
+function handleUserQuestionResponse(
+  id: string,
+  answers: Record<string, UserQuestionAnswer> | null,
+): void {
   const pending = pendingUserQuestions.get(id);
   if (!pending) return;
   if (!answers) {
@@ -426,20 +510,36 @@ function handleUserQuestionResponse(id: string, answers: Record<string, string> 
     return;
   }
 
-  const allowedIds = new Set(pending.request.questions.map((question) => question.id));
-  const safeAnswers: Record<string, string> = {};
+  const questions = new Map(
+    pending.request.questions.map((question) => [question.id, question]),
+  );
+  const safeAnswers: Record<string, UserQuestionAnswer> = {};
   for (const [key, value] of Object.entries(answers)) {
-    if (allowedIds.has(key) && typeof value === "string") safeAnswers[key] = value.slice(0, 3000);
-  }
-  if (pending.request.questions.some((question) => !safeAnswers[question.id]?.trim())) {
-    post({ type: "error", message: "Answer every question before submitting." });
-    return;
+    const question = questions.get(key);
+    if (!question) continue;
+    if (question.selectionMode === "multiple") {
+      const values = Array.isArray(value)
+        ? value
+        : typeof value === "string"
+          ? [value]
+          : [];
+      const safeValues = values
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim().slice(0, 3000))
+        .filter(Boolean)
+        .slice(0, 9);
+      if (safeValues.length > 0) safeAnswers[key] = safeValues;
+    } else {
+      const answer = Array.isArray(value) ? value[0] : value;
+      if (typeof answer === "string" && answer.trim())
+        safeAnswers[key] = answer.trim().slice(0, 3000);
+    }
   }
   pending.settle({ answers: safeAnswers, cancelled: false });
 }
 
 /** Lets the user inspect and edit a model-authored worker configuration before it runs. */
-function requestSubAgentConfig(
+async function requestSubAgentConfig(
   prompt: string,
   options: SpawnSubAgentOptions,
 ): Promise<ResolvedSubAgentConfig | null> {
@@ -448,17 +548,26 @@ function requestSubAgentConfig(
   let modelInfo = modelCatalog.find((entry) => entry.id === proposedModel);
   const notes: string[] = [];
   if (!modelInfo) {
-    modelInfo = modelCatalog.find((entry) => entry.id === model) ?? modelCatalog[0];
-    if (!modelInfo) throw new Error("The model catalog is unavailable; no sub-agent was started.");
+    modelInfo =
+      modelCatalog.find((entry) => entry.id === model) ?? modelCatalog[0];
+    if (!modelInfo)
+      throw new Error(
+        "The model catalog is unavailable; no sub-agent was started.",
+      );
     proposedModel = modelInfo.id;
-    notes.push(`O modelo '${requestedModel}' não está no catálogo atual. Revise a alternativa proposta: '${proposedModel}'.`);
+    notes.push(
+      `O modelo '${requestedModel}' não está no catálogo atual. Revise a alternativa proposta: '${proposedModel}'.`,
+    );
   }
   const efforts = modelInfo.reasoningEfforts ?? [];
-  const proposedEffort = options.reasoningEffort && efforts.includes(options.reasoningEffort)
-    ? options.reasoningEffort
-    : undefined;
+  const proposedEffort =
+    options.reasoningEffort && efforts.includes(options.reasoningEffort)
+      ? options.reasoningEffort
+      : undefined;
   if (options.reasoningEffort && !proposedEffort) {
-    notes.push(`O modelo '${proposedModel}' não oferece o effort '${options.reasoningEffort}'. Escolha outro modelo ou effort.`);
+    notes.push(
+      `O modelo '${proposedModel}' não oferece o effort '${options.reasoningEffort}'. Escolha outro modelo ou effort.`,
+    );
   }
 
   const id = randomUUID();
@@ -473,6 +582,13 @@ function requestSubAgentConfig(
     ...(notes.length ? { proposalNote: notes.join(" ") } : {}),
   };
 
+  await logSessionUiEvent({
+    version: 1,
+    kind: "subagent-config",
+    id,
+    data: { request, status: "pending" },
+  });
+
   return new Promise<ResolvedSubAgentConfig | null>((resolve) => {
     let settled = false;
     const settle = (config: ResolvedSubAgentConfig | null): void => {
@@ -480,12 +596,23 @@ function requestSubAgentConfig(
       settled = true;
       clearTimeout(timer);
       pendingSubAgentConfigs.delete(id);
-      if (!config) post({ type: "subAgentConfigResolved", id, action: "cancel" });
+      if (!config) {
+        void logSessionUiEvent({
+          version: 1,
+          kind: "subagent-config",
+          id,
+          data: { request, status: "cancelled" },
+        });
+        post({ type: "subAgentConfigResolved", id, action: "cancel" });
+      }
       resolve(config);
     };
 
     const timer = setTimeout(() => {
-      post({ type: "error", message: `Configuration for '${options.title}' timed out.` });
+      post({
+        type: "error",
+        message: `Configuration for '${options.title}' timed out.`,
+      });
       settle(null);
     }, SUBAGENT_CONFIG_TIMEOUT_MS);
 
@@ -506,11 +633,17 @@ function handleSubAgentConfigResponse(
 
   const modelInfo = modelCatalog.find((entry) => entry.id === request.model);
   if (!modelInfo) {
-    post({ type: "error", message: "O modelo selecionado não está mais disponível no catálogo." });
+    post({
+      type: "error",
+      message: "O modelo selecionado não está mais disponível no catálogo.",
+    });
     pending.settle(null);
     return;
   }
-  if (request.reasoningEffort && !modelInfo.reasoningEfforts?.includes(request.reasoningEffort)) {
+  if (
+    request.reasoningEffort &&
+    !modelInfo.reasoningEfforts?.includes(request.reasoningEffort)
+  ) {
     post({
       type: "error",
       message: `O modelo '${modelInfo.id}' não aceita o effort '${request.reasoningEffort}'.`,
@@ -519,19 +652,56 @@ function handleSubAgentConfigResponse(
     return;
   }
 
-  pending.settle({
+  const config: ResolvedSubAgentConfig = {
     id: request.id,
     model: modelInfo.id,
-    ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+    ...(request.reasoningEffort
+      ? { reasoningEffort: request.reasoningEffort }
+      : {}),
     instructions: (request.instructions ?? "").slice(0, 8000),
+  };
+  void logSessionUiEvent({
+    version: 1,
+    kind: "subagent-config",
+    id: request.id,
+    data: {
+      request: pending.request,
+      status: "started",
+      resolved: {
+        model: config.model,
+        ...(config.reasoningEffort
+          ? { reasoningEffort: config.reasoningEffort }
+          : {}),
+        instructions: config.instructions,
+      },
+    },
   });
-  post({ type: "subAgentConfigResolved", id: request.id, action: "start" });
+  pending.settle(config);
+  post({
+    type: "subAgentConfigResolved",
+    id: request.id,
+    action: "start",
+    config: {
+      model: config.model,
+      ...(config.reasoningEffort
+        ? { reasoningEffort: config.reasoningEffort }
+        : {}),
+      instructions: config.instructions,
+    },
+  });
 }
 
 /** The single most useful argument to show a human for a given tool. */
-function approvalDetail(toolName: string, args: Record<string, unknown>): string {
+function approvalDetail(
+  toolName: string,
+  args: Record<string, unknown>,
+): string {
   if (toolName === "bash") return String(args.command ?? "");
-  if (toolName === "write" || toolName === "edit" || toolName === "multi_edit") {
+  if (
+    toolName === "write" ||
+    toolName === "edit" ||
+    toolName === "multi_edit"
+  ) {
     return String(args.file_path ?? "");
   }
   return JSON.stringify(args, null, 2);
@@ -598,7 +768,13 @@ function createConfirmFn(agentId?: string): ConfirmFn {
   return async (toolName, args) => {
     const allowSet = new Set([...globalAllowSet, ...projectAllowSet]);
     // `interactive: true` — a modal is the GUI's equivalent of a TTY prompt.
-    const decision = decideConfirmation(allowSet, denyPatterns, toolName, args, true);
+    const decision = decideConfirmation(
+      allowSet,
+      denyPatterns,
+      toolName,
+      args,
+      true,
+    );
     if (decision === "allow") return "allow";
     if (decision === "deny") return "deny";
     return requestApproval(toolName, args, agentId);
@@ -620,7 +796,9 @@ async function persistGrant(key: string, scope: ApprovalScope): Promise<void> {
   if (scope === "global") {
     globalAllowSet.add(key);
     const cfg = await loadConfig();
-    await saveConfig({ permissions: { ...cfg.permissions, allow: [...globalAllowSet] } });
+    await saveConfig({
+      permissions: { ...cfg.permissions, allow: [...globalAllowSet] },
+    });
   } else if (scope === "project") {
     projectAllowSet.add(key);
     await saveProjectPermissions(process.cwd(), [...projectAllowSet]);
@@ -629,7 +807,10 @@ async function persistGrant(key: string, scope: ApprovalScope): Promise<void> {
 
 /** Reports the merged grant lists so the UI can show what is pre-approved. */
 function postGrants(): void {
-  post({ type: "grants", grants: { project: [...projectAllowSet], global: [...globalAllowSet] } });
+  post({
+    type: "grants",
+    grants: { project: [...projectAllowSet], global: [...globalAllowSet] },
+  });
 }
 
 async function handleApprovalResponse(
@@ -677,14 +858,16 @@ async function handleApprovalResponse(
 function denyAllPending(reason: string): void {
   const hadApprovals = pendingApprovals.size > 0;
   const hadQuestions = pendingUserQuestions.size > 0;
-  const hadSubAgentWork = pendingSubAgentConfigs.size > 0 || subAgentControllers.size > 0;
+  const hadSubAgentWork =
+    pendingSubAgentConfigs.size > 0 || subAgentControllers.size > 0;
   for (const [id, pending] of [...pendingApprovals]) {
     post({ type: "approvalResolved", id, decision: "deny", scope: "once" });
     pending.settle("deny");
   }
   pendingApprovals.clear();
   if (hadQuestions) cancelAllUserQuestions(reason);
-  for (const pending of [...pendingSubAgentConfigs.values()]) pending.settle(null);
+  for (const pending of [...pendingSubAgentConfigs.values()])
+    pending.settle(null);
   for (const [id, controller] of subAgentControllers) {
     controller.abort();
     cancelUserQuestionsForAgent(id);
@@ -715,7 +898,8 @@ async function resolveCredentials(): Promise<{ key: string; source: string }> {
   }
 
   const config = await loadConfig();
-  if (config.rubyApiKey) return { key: config.rubyApiKey, source: "~/.rubycli/config.json" };
+  if (config.rubyApiKey)
+    return { key: config.rubyApiKey, source: "~/.rubycli/config.json" };
 
   return { key: "", source: "none" };
 }
@@ -729,7 +913,8 @@ async function resolveCredentials(): Promise<{ key: string; source: string }> {
  * `isRubyCatalogModel` rather than plain prefix detection.
  */
 function resolveProviderFor(name: string): Provider {
-  if (isRubyCatalogModel(name, { hasRubyKey: apiKey.length > 0 })) return "rubycli";
+  if (isRubyCatalogModel(name, { hasRubyKey: apiKey.length > 0 }))
+    return "rubycli";
   return detectProvider(name);
 }
 
@@ -756,6 +941,24 @@ async function loadPermissions(): Promise<void> {
 
 function postSubAgent(agent: SubAgentSummary): void {
   post({ type: "subAgentUpdate", agent });
+  const previous = persistedSubAgentStatuses.get(agent.id);
+  const shouldPersist = previous !== agent.status || agent.status === "review";
+  if (!shouldPersist) return;
+  persistedSubAgentStatuses.set(agent.id, agent.status);
+  const snapshot: SubAgentSummary = {
+    ...agent,
+    ...(agent.output ? { output: agent.output.slice(-12_000) } : {}),
+    ...(agent.diff ? { diff: agent.diff.slice(0, 120_000) } : {}),
+    ...(agent.changedFiles
+      ? { changedFiles: agent.changedFiles.slice(0, 200) }
+      : {}),
+  };
+  void logSessionUiEvent({
+    version: 1,
+    kind: "subagent",
+    id: agent.id,
+    data: { agent: snapshot },
+  });
 }
 
 function waitForSubAgentReview(
@@ -784,7 +987,8 @@ function handleSubAgentReviewResponse(
 
 async function acquireSubAgentSlot(signal: AbortSignal): Promise<() => void> {
   while (activeSubAgentCount >= MAX_CONCURRENT_SUBAGENTS) {
-    if (signal.aborted) throw new Error("Sub-agent was cancelled while queued.");
+    if (signal.aborted)
+      throw new Error("Sub-agent was cancelled while queued.");
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   if (signal.aborted) throw new Error("Sub-agent was cancelled while queued.");
@@ -805,14 +1009,22 @@ async function runSubAgent(
   const id = config.id;
   const controller = new AbortController();
   subAgentControllers.set(id, controller);
-  const usage = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, llmCalls: 0, toolCalls: 0 };
+  const usage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    llmCalls: 0,
+    toolCalls: 0,
+  };
   const summary: SubAgentSummary = {
     id,
     title: options.title,
     prompt,
     role: options.role,
     model: config.model,
-    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    ...(config.reasoningEffort
+      ? { reasoningEffort: config.reasoningEffort }
+      : {}),
     instructions: config.instructions,
     status: "queued",
     progress: "Aguardando uma vaga de execução",
@@ -826,7 +1038,8 @@ async function runSubAgent(
   let output = "";
   try {
     releaseSlot = await acquireSubAgentSlot(controller.signal);
-    if (controller.signal.aborted) throw new Error("Sub-agent was cancelled before launch.");
+    if (controller.signal.aborted)
+      throw new Error("Sub-agent was cancelled before launch.");
 
     if (options.role === "worker") {
       summary.progress = "Criando um worktree isolado a partir do estado atual";
@@ -840,10 +1053,15 @@ async function runSubAgent(
       includeUsage: true,
       provider: selectedProvider,
       baseUrl,
-      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+      ...(config.reasoningEffort
+        ? { reasoningEffort: config.reasoningEffort }
+        : {}),
     });
     const configFromDisk = await loadConfig();
-    const runner = createSandboxRunner(configFromDisk.sandbox ?? "auto", workspaceRoot);
+    const runner = createSandboxRunner(
+      configFromDisk.sandbox ?? "auto",
+      workspaceRoot,
+    );
     const available = createDefaultRegistry(config.model, runner, {
       includeTask: false,
       workspaceRoot,
@@ -852,7 +1070,8 @@ async function runSubAgent(
     let childTools = available;
     if (options.role === "explorer") {
       childTools = new ToolRegistry();
-      for (const tool of available.all()) if (tool.readonly) childTools.register(tool);
+      for (const tool of available.all())
+        if (tool.readonly) childTools.register(tool);
     }
     const childSkills = new SkillRegistry();
     await childSkills.discover(workspaceRoot);
@@ -862,8 +1081,12 @@ async function runSubAgent(
       options.role === "explorer"
         ? "Investigate only; available tools are read-only. Return findings and file references."
         : "Implement only in this isolated worktree. Do not modify the user's main working tree. Return a concise summary of changes and verification.",
-      config.instructions ? `User guidance for this agent:\n${config.instructions}` : "",
-    ].filter(Boolean).join("\n\n");
+      config.instructions
+        ? `User guidance for this agent:\n${config.instructions}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const child = new Agent(
       childClient,
       childTools,
@@ -874,7 +1097,9 @@ async function runSubAgent(
       {
         model: config.model,
         provider: selectedProvider,
-        ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+        ...(config.reasoningEffort
+          ? { reasoningEffort: config.reasoningEffort }
+          : {}),
         workspaceRoot,
         onObservability: (event) => {
           onObservability(event, id);
@@ -894,7 +1119,10 @@ async function runSubAgent(
     child.setForcesConfirmationFn(forcesConfirmation);
     child.setPermissionMode(permissionMode);
     summary.status = "running";
-    summary.progress = options.role === "worker" ? "Implementando no worktree isolado" : "Investigando o workspace";
+    summary.progress =
+      options.role === "worker"
+        ? "Implementando no worktree isolado"
+        : "Investigando o workspace";
     postSubAgent(summary);
 
     for await (const event of child.run(prompt, "react", controller.signal)) {
@@ -965,8 +1193,10 @@ async function runSubAgent(
           return output.trim();
         } catch (error) {
           summary.status = "review";
-          summary.progress = "O diff conflita com alterações atuais; revise antes de tentar novamente";
-          summary.error = error instanceof Error ? error.message : String(error);
+          summary.progress =
+            "O diff conflita com alterações atuais; revise antes de tentar novamente";
+          summary.error =
+            error instanceof Error ? error.message : String(error);
           postSubAgent(summary);
         }
       }
@@ -979,7 +1209,9 @@ async function runSubAgent(
   } catch (error) {
     summary.status = controller.signal.aborted ? "cancelled" : "failed";
     summary.error = error instanceof Error ? error.message : String(error);
-    summary.progress = controller.signal.aborted ? "Cancelado" : "Falha na execução";
+    summary.progress = controller.signal.aborted
+      ? "Cancelado"
+      : "Falha na execução";
     postSubAgent(summary);
     if (controller.signal.aborted) return output.trim();
     throw error;
@@ -992,9 +1224,15 @@ async function runSubAgent(
   }
 }
 
-async function spawnSubAgent(prompt: string, options: SpawnSubAgentOptions): Promise<string> {
+async function spawnSubAgent(
+  prompt: string,
+  options: SpawnSubAgentOptions,
+): Promise<string> {
   const config = await requestSubAgentConfig(prompt, options);
-  if (!config) throw new Error(`Sub-agent '${options.title}' was cancelled before launch.`);
+  if (!config)
+    throw new Error(
+      `Sub-agent '${options.title}' was cancelled before launch.`,
+    );
   const run = runSubAgent(prompt, options, config);
   subAgentRuns.set(config.id, run);
   try {
@@ -1003,11 +1241,93 @@ async function spawnSubAgent(prompt: string, options: SpawnSubAgentOptions): Pro
       `Sub-agent: ${options.title} (${options.role})`,
       `Model: ${config.model}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""}`,
       config.instructions ? `Instructions: ${config.instructions}` : "",
-    ].filter(Boolean).join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
     return `${configuration}\n\n${output}`.trim();
   } finally {
     subAgentRuns.delete(config.id);
   }
+}
+
+/** A workflow uses the same visible model picker, approval and worktree policy as task(). */
+const workflowConfigs = new WeakMap<
+  WorkflowAgentRequest,
+  ResolvedSubAgentConfig
+>();
+
+function workflowSubAgentOptions(
+  request: WorkflowAgentRequest,
+): SpawnSubAgentOptions {
+  return {
+    maxTurns: request.maxTurns ?? 15,
+    title: request.name,
+    role: request.role,
+    ...(request.model ? { model: request.model } : {}),
+    ...(request.reasoningEffort
+      ? { reasoningEffort: request.reasoningEffort }
+      : {}),
+    ...(request.instructions ? { instructions: request.instructions } : {}),
+  };
+}
+
+function workflowPrompt(request: WorkflowAgentRequest): string {
+  if (!request.resultSchema) return request.prompt;
+  return (
+    `${request.prompt}\n\n` +
+    "## Required structured result\n" +
+    "Return only valid JSON matching this schema, with no surrounding explanation or markdown fence:\n" +
+    `\n${JSON.stringify(request.resultSchema, null, 2)}`
+  );
+}
+
+async function configureWorkflowAgent(
+  request: WorkflowAgentRequest,
+): Promise<ResolvedSubAgentConfig | null> {
+  const options = workflowSubAgentOptions(request);
+  return requestSubAgentConfig(workflowPrompt(request), options);
+}
+
+async function runWorkflowExplorer(
+  request: WorkflowAgentRequest,
+): Promise<string> {
+  const config = await configureWorkflowAgent(request);
+  if (!config)
+    throw new Error(`Workflow agent '${request.name}' was cancelled.`);
+  return runSubAgent(
+    workflowPrompt(request),
+    workflowSubAgentOptions(request),
+    config,
+  );
+}
+
+async function confirmWorkflowWorker(
+  request: WorkflowAgentRequest,
+): Promise<boolean> {
+  const config = await configureWorkflowAgent(request);
+  if (!config) return false;
+  workflowConfigs.set(request, config);
+  return true;
+}
+
+async function runWorkflowWorker(
+  request: WorkflowAgentRequest,
+): Promise<string> {
+  const config = workflowConfigs.get(request);
+  workflowConfigs.delete(request);
+  if (!config)
+    throw new Error(
+      `Workflow worker '${request.name}' has no approved configuration.`,
+    );
+  return runSubAgent(
+    workflowPrompt(request),
+    workflowSubAgentOptions(request),
+    config,
+  );
+}
+
+function reportWorkflowEvent(event: WorkflowEvent): void {
+  post({ type: "workflowEvent", event });
 }
 
 /** Builds the agent for the current model. Called on start, model change and reset. */
@@ -1025,13 +1345,23 @@ async function buildAgent(): Promise<void> {
   const baseInstruction = await loadSystemInstruction();
   const catalogInstructions = modelCatalog.length
     ? `Available sub-agent models (choose exact ids; the user can edit each recommendation):\n${modelCatalog
-        .map((entry) => `- ${entry.id}${entry.reasoningEfforts?.length ? ` (effort: ${entry.reasoningEfforts.join(", ")})` : ""}`)
+        .map(
+          (entry) =>
+            `- ${entry.id}${entry.reasoningEfforts?.length ? ` (effort: ${entry.reasoningEfforts.join(", ")})` : ""}`,
+        )
         .join("\n")}`
     : "The model catalog is unavailable; do not invent a sub-agent model id. Ask the user or use the current model if it becomes available.";
   const systemInstruction = `${baseInstruction}\n\n## Sub-agent orchestration\n\nDelegate independent work with the task tool when it helps. Propose a concise title, role (explorer for read-only research, worker for isolated implementation), exact catalog model, supported reasoning effort, and focused instructions describing boundaries and output. For each proposed sub-agent, the user chooses whether to start with your configuration or edit it first. Workers run in a Git worktree and their diff is never applied until the user approves it.\n\n${catalogInstructions}`;
   const tools = createDefaultRegistry(model, runner, {
     spawnSubAgent,
     askUser: (question) => requestUserQuestion("main", "Ruby", question),
+    workflow: {
+      runAgent: runWorkflowExplorer,
+      confirmWorker: confirmWorkflowWorker,
+      runWorkerInWorktree: runWorkflowWorker,
+      maxConcurrency: MAX_CONCURRENT_SUBAGENTS,
+      onEvent: reportWorkflowEvent,
+    },
   });
   const skills = new SkillRegistry();
   await skills.discover(process.cwd());
@@ -1042,7 +1372,10 @@ async function buildAgent(): Promise<void> {
   // A failing server is reported and skipped; it never blocks the agent.
   await connectMcp();
   await mcp?.registerTools(tools).catch((err: unknown) => {
-    post({ type: "error", message: `MCP tools unavailable: ${err instanceof Error ? err.message : String(err)}` });
+    post({
+      type: "error",
+      message: `MCP tools unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    });
   });
   postMcpStatus();
 
@@ -1087,20 +1420,26 @@ async function reportModels(): Promise<void> {
     return;
   }
 
-  const summaries: ModelSummary[] = models.filter((m) => m.id?.trim()).map((m) => {
-    const modelProvider = isRubyCatalogModel(m.id, { hasRubyKey: apiKey.length > 0 })
-      ? "rubycli"
-      : detectProvider(m.id);
-    const supportsEffort = m.supports_reasoning && (modelProvider === "rubycli" || modelProvider === "openai");
-    return {
-    id: m.id,
-    label: m.display_name ?? m.id,
-    contextWindow: remoteContextWindow(m),
-    supportsReasoning: m.supports_reasoning,
-    reasoningEfforts: supportsEffort ? ["low", "medium", "high"] : [],
-    supportsVision: m.supports_vision,
-  };
-  });
+  const summaries: ModelSummary[] = models
+    .filter((m) => m.id?.trim())
+    .map((m) => {
+      const modelProvider = isRubyCatalogModel(m.id, {
+        hasRubyKey: apiKey.length > 0,
+      })
+        ? "rubycli"
+        : detectProvider(m.id);
+      const supportsEffort =
+        m.supports_reasoning &&
+        (modelProvider === "rubycli" || modelProvider === "openai");
+      return {
+        id: m.id,
+        label: m.display_name ?? m.id,
+        contextWindow: remoteContextWindow(m),
+        supportsReasoning: m.supports_reasoning,
+        reasoningEfforts: supportsEffort ? ["low", "medium", "high"] : [],
+        supportsVision: m.supports_vision,
+      };
+    });
   modelCatalog = summaries;
   post({ type: "models", models: summaries });
 
@@ -1128,23 +1467,29 @@ function reportUsage(): void {
 }
 
 /** Sends the current workspace's recent sessions and, when changed, its transcript. */
-async function reportSessions(history?: Message[]): Promise<void> {
+async function reportSessions(transcript?: SessionEntry[]): Promise<void> {
   post({
     type: "sessions",
     sessions: await Session.list(process.cwd()),
     currentSessionId: session?.id,
-    ...(history !== undefined ? { history } : {}),
+    ...(transcript !== undefined ? { transcript } : {}),
   });
 }
 
 /** Starts a new persisted conversation without changing the workspace. */
 async function startNewSession(): Promise<void> {
-  if (running) {
-    post({ type: "error", message: "Finish or stop the current turn before starting a new conversation." });
+  if (running || autoGoalRunning) {
+    post({
+      type: "error",
+      message:
+        "Finish or stop the current turn before starting a new conversation.",
+    });
     return;
   }
+  await sessionLogQueue;
   session = await Session.create(process.cwd());
   sessionMessages = [];
+  persistedSubAgentStatuses.clear();
   await buildAgent();
   await reportSessions([]);
   reportUsage();
@@ -1153,26 +1498,32 @@ async function startNewSession(): Promise<void> {
 
 /** Resumes the engine context and visible transcript from one workspace session. */
 async function resumeSession(sessionId: string): Promise<void> {
-  if (running) {
-    post({ type: "error", message: "Finish or stop the current turn before switching conversations." });
+  if (running || autoGoalRunning) {
+    post({
+      type: "error",
+      message:
+        "Finish or stop the current turn before switching conversations.",
+    });
     return;
   }
+  await sessionLogQueue;
   const loaded = await Session.loadMessages(sessionId, process.cwd());
   session = loaded.session;
   sessionMessages = loaded.messages;
+  persistedSubAgentStatuses.clear();
   await buildAgent();
-  await reportSessions(sessionMessages);
+  await reportSessions(loaded.entries);
   reportUsage();
   post({ type: "status", status: "ready" });
 }
 
 /** Opens the latest non-empty conversation, or creates the first one. */
-async function restoreLatestSession(): Promise<Message[]> {
+async function restoreLatestSession(): Promise<SessionEntry[]> {
   try {
     const loaded = await Session.loadMessages("latest", process.cwd());
     session = loaded.session;
     sessionMessages = loaded.messages;
-    return loaded.messages;
+    return loaded.entries;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("No sessions")) throw err;
@@ -1182,65 +1533,102 @@ async function restoreLatestSession(): Promise<Message[]> {
   }
 }
 
+/** Runs one engine turn and streams its events; orchestration owns busy/status state. */
+async function runAgentTurn(
+  text: string,
+  sessionText: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; errors?: string[] }> {
+  if (!agent) throw new Error("Engine is not ready yet.");
+  let turnText = "";
+  let pendingAssistantText = "";
+  const errors: string[] = [];
+  await logSessionEntry({ type: "user", content: sessionText });
+  const flushAssistantText = async (): Promise<void> => {
+    if (!pendingAssistantText) return;
+    const content = pendingAssistantText;
+    pendingAssistantText = "";
+    await logSessionEntry({ type: "assistant", content });
+  };
+  for await (const event of agent.run(text, "react", signal)) {
+    if (signal?.aborted || cancelled) break;
+    if (event.type === "text") {
+      turnText += event.text;
+      pendingAssistantText += event.text;
+      post({ type: "event", event: event as AgentEvent });
+      continue;
+    }
+    await flushAssistantText();
+    if (event.type === "error") errors.push(event.message);
+    if (event.type === "tool_call") {
+      await logSessionEntry({
+        type: "tool_call",
+        name: event.name,
+        args: event.args,
+        ...(event.thoughtSignature
+          ? { thoughtSignature: event.thoughtSignature }
+          : {}),
+      });
+    }
+    if (event.type === "tool_result") {
+      await logSessionEntry({
+        type: "tool_result",
+        name: event.name,
+        result: event.result,
+      });
+    }
+    post({ type: "event", event: event as AgentEvent });
+  }
+  await flushAssistantText();
+  return { text: turnText, ...(errors.length > 0 ? { errors } : {}) };
+}
+
+async function refreshSessionAfterTurn(): Promise<void> {
+  await skillRegistry?.discover(process.cwd());
+  if (skillRegistry) {
+    const discovered = getSkillSummaries();
+    skillCount = discovered.length;
+    post({ type: "skills", skills: discovered });
+  }
+  denyAllPending("Turn ended with pending approvals; they were denied.");
+  browserBridge.failAll("Turn ended before the browser operation completed.");
+  reportUsage();
+  await sessionLogQueue;
+  if (session) {
+    try {
+      sessionMessages = (await Session.loadMessages(session.id, process.cwd()))
+        .messages;
+    } catch (err) {
+      fail(err);
+    }
+    await reportSessions();
+  }
+}
+
 /** Runs one turn, streaming every engine event to the UI. */
 async function runPrompt(text: string, sessionText = text): Promise<void> {
   if (!agent) {
     post({ type: "error", message: "Engine is not ready yet." });
     return;
   }
-  if (running) {
+  if (running || autoGoalRunning) {
     post({ type: "error", message: "A turn is already in progress." });
     return;
   }
 
   running = true;
   cancelled = false;
+  activeTurnController = new AbortController();
   post({ type: "status", status: "busy" });
-
-  let turnText = "";
   try {
-    await session?.log({ type: "user", content: sessionText });
-    for await (const event of agent.run(text)) {
-      if (cancelled) break;
-      if (event.type === "text") turnText += event.text;
-      if (event.type === "tool_call") {
-        await session?.log({
-          type: "tool_call",
-          name: event.name,
-          args: event.args,
-          ...(event.thoughtSignature ? { thoughtSignature: event.thoughtSignature } : {}),
-        });
-      }
-      if (event.type === "tool_result") {
-        await session?.log({ type: "tool_result", name: event.name, result: event.result });
-      }
-      post({ type: "event", event: event as AgentEvent });
-    }
+    await runAgentTurn(text, sessionText, activeTurnController.signal);
   } catch (err) {
     fail(err);
   } finally {
-    await skillRegistry?.discover(process.cwd());
-    if (skillRegistry) {
-      const discovered = getSkillSummaries();
-      skillCount = discovered.length;
-      post({ type: "skills", skills: discovered });
-    }
-    if (turnText) await session?.log({ type: "assistant", content: turnText });
-    // A turn that ends with an unanswered approval would leave the modal on
-    // screen forever; settle them before reporting the turn as finished.
-    denyAllPending("Turn ended with pending approvals; they were denied.");
-    browserBridge.failAll("Turn ended before the browser operation completed.");
+    await refreshSessionAfterTurn();
+    activeTurnController = undefined;
     running = false;
-    reportUsage();
     post({ type: "status", status: "ready" });
-    if (session) {
-      try {
-        sessionMessages = (await Session.loadMessages(session.id, process.cwd())).messages;
-      } catch (err) {
-        fail(err);
-      }
-      await reportSessions();
-    }
   }
 }
 
@@ -1251,7 +1639,7 @@ async function runSkill(name: string, args: string): Promise<void> {
     post({ type: "status", status: "ready" });
     return;
   }
-  if (running) {
+  if (running || autoGoalRunning) {
     post({ type: "error", message: "A turn is already in progress." });
     return;
   }
@@ -1276,7 +1664,10 @@ async function runSkill(name: string, args: string): Promise<void> {
     const command = `/${name}${args.trim() ? ` ${args.trim()}` : ""}`;
     await runPrompt(prompt, command);
   } catch (err) {
-    post({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    post({
+      type: "error",
+      message: err instanceof Error ? err.message : String(err),
+    });
     post({ type: "status", status: "ready" });
   }
 }
@@ -1285,6 +1676,13 @@ async function runSkill(name: string, args: string): Promise<void> {
 async function runCompact(): Promise<void> {
   if (!agent) {
     post({ type: "error", message: "Engine is not ready yet." });
+    return;
+  }
+  if (running || autoGoalRunning) {
+    post({
+      type: "error",
+      message: "Finish or stop the current turn before compacting.",
+    });
     return;
   }
   post({ type: "compacting", active: true });
@@ -1320,21 +1718,101 @@ async function reportGoal(): Promise<void> {
   post({ type: "goal", goal: (goal as GoalSummary | null) ?? null });
 }
 
-async function handleGoal(request: Extract<EngineRequest, { type: "goal" }>): Promise<void> {
+async function startGoalAuto(maxRounds?: number): Promise<void> {
+  if (!agent) throw new Error("Engine is not ready yet.");
+  if (running || autoGoalRunning)
+    throw new Error("A turn is already in progress.");
+
+  const controller = new AbortController();
+  autoGoalController = controller;
+  autoGoalRunning = true;
+  cancelled = false;
+  post({ type: "goalAuto", running: true });
+  post({ type: "status", status: "busy" });
+
+  try {
+    const result = await runAutoGoal({
+      cwd: process.cwd(),
+      ...(maxRounds !== undefined ? { maxRounds } : {}),
+      signal: controller.signal,
+      onGoalUpdated: (goal) =>
+        post({ type: "goal", goal: (goal as GoalSummary | null) ?? null }),
+      runTurn: async (prompt, signal) => {
+        activeTurnController = controller;
+        const result = await runAgentTurn(
+          prompt,
+          `[Continuação automática da meta] ${prompt}`,
+          signal,
+        );
+        await refreshSessionAfterTurn();
+        return result;
+      },
+    });
+
+    if (result.status === "blocked") {
+      post({
+        type: "event",
+        event: {
+          type: "notice",
+          message: `A continuação automática foi bloqueada após ${result.rounds} rodada(s). ${result.reason ?? "Revise o progresso e retome a meta para tentar novamente."}`,
+        } as AgentEvent,
+      });
+    } else if (result.status === "completed") {
+      post({
+        type: "event",
+        event: {
+          type: "notice",
+          message: `Meta concluída em ${result.rounds} rodada(s) automática(s).`,
+        } as AgentEvent,
+      });
+    } else if (result.status === "inactive") {
+      post({
+        type: "error",
+        message:
+          result.goal?.status === "complete"
+            ? "A meta já está concluída."
+            : "A meta não está ativa. Retome uma meta pausada para continuar.",
+      });
+    }
+  } finally {
+    await refreshSessionAfterTurn();
+    activeTurnController = undefined;
+    autoGoalController = undefined;
+    autoGoalRunning = false;
+    post({ type: "goalAuto", running: false });
+    post({ type: "status", status: "ready" });
+  }
+}
+
+async function handleGoal(
+  request: Extract<EngineRequest, { type: "goal" }>,
+): Promise<void> {
   const cwd = process.cwd();
   switch (request.action) {
     case "get":
       break;
     case "set":
+      autoGoalController?.abort();
       await setGoal(request.text, cwd);
       break;
     case "note":
       await noteGoal(request.text, cwd);
       break;
     case "status":
+      if (request.status !== "active") autoGoalController?.abort();
       await setGoalStatus(request.status, cwd);
       break;
+    case "maxRounds":
+      await setGoalMaxRounds(request.maxRounds, cwd);
+      break;
+    case "auto":
+      await startGoalAuto(request.maxRounds);
+      return;
+    case "stopAuto":
+      autoGoalController?.abort();
+      break;
     case "clear":
+      autoGoalController?.abort();
       await clearGoal(cwd);
       break;
   }
@@ -1367,9 +1845,9 @@ async function handle(request: EngineRequest): Promise<void> {
       await reportModels();
       await loadPermissions();
 
-      const history = await restoreLatestSession();
+      const transcript = await restoreLatestSession();
       await buildAgent();
-      await reportSessions(history);
+      await reportSessions(transcript);
       post({
         type: "ready",
         workspace: process.cwd(),
@@ -1397,10 +1875,19 @@ async function handle(request: EngineRequest): Promise<void> {
 
     case "abort":
       cancelled = true;
+      autoGoalController?.abort();
+      activeTurnController?.abort();
       denyAllPending("Turn aborted; pending approvals were denied.");
       return;
 
     case "setModel": {
+      if (running || autoGoalRunning) {
+        post({
+          type: "error",
+          message: "Finish or stop the current turn before switching models.",
+        });
+        return;
+      }
       model = request.model;
       await buildAgent();
       reportUsage();
@@ -1443,7 +1930,8 @@ async function handle(request: EngineRequest): Promise<void> {
       if (request.action === "new") {
         await startNewSession();
       } else {
-        if (!request.sessionId) throw new Error("A session id is required to resume a conversation.");
+        if (!request.sessionId)
+          throw new Error("A session id is required to resume a conversation.");
         await resumeSession(request.sessionId);
       }
       return;
@@ -1457,7 +1945,12 @@ async function handle(request: EngineRequest): Promise<void> {
       return;
 
     case "browserResult": {
-      browserBridge.resolve(request.id, request.ok, request.result, request.error);
+      browserBridge.resolve(
+        request.id,
+        request.ok,
+        request.result,
+        request.error,
+      );
       return;
     }
 
@@ -1468,6 +1961,7 @@ async function handle(request: EngineRequest): Promise<void> {
       mcp = undefined;
       denyAllPending("Engine shutting down; pending approvals were denied.");
       await Promise.allSettled([...subAgentRuns.values()]);
+      await sessionLogQueue;
       await worktrees.cleanupAll();
       process.exit(0);
       return;

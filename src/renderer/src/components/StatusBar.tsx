@@ -36,16 +36,31 @@ export function StatusBar({
           ? "bg-destructive"
           : "bg-muted-foreground";
   const statusLabel =
-    status === "ready" ? "pronto" : status === "busy" ? "trabalhando" : status === "starting" ? "iniciando" : status === "error" ? "erro" : "parado";
+    status === "ready"
+      ? "pronto"
+      : status === "busy"
+        ? "trabalhando"
+        : status === "starting"
+          ? "iniciando"
+          : status === "error"
+            ? "erro"
+            : "parado";
 
   return (
-    <footer className="flex h-9 shrink-0 items-center gap-3 border-t border-line bg-background px-4 text-xs text-muted-foreground">
+    <footer
+      aria-label="Status e controles"
+      className="flex h-9 min-w-0 shrink-0 items-center gap-3 overflow-x-auto border-t border-line bg-background px-4 text-xs text-muted-foreground max-[820px]:gap-1.5 max-[820px]:px-2"
+    >
       <span className="flex items-center gap-1.5">
         <span className={cn("h-1.5 w-1.5 rounded-full", dotColor)} />
-        <span className="font-mono">{statusLabel}</span>
+        <span className="font-mono max-[820px]:sr-only">{statusLabel}</span>
       </span>
 
-      <span className="flex items-center gap-1 rounded-md border border-line bg-card p-0.5" title="Modo de permissão — /mode ask | edits | plan" aria-label="Modo de permissão">
+      <span
+        className="flex items-center gap-1 rounded-md border border-line bg-card p-0.5"
+        title="Modo de permissão — /mode ask | edits | plan"
+        aria-label="Modo de permissão"
+      >
         {MODES.map((mode) => (
           <button
             key={mode}
@@ -53,7 +68,7 @@ export function StatusBar({
             onClick={() => setPermissionMode(mode)}
             aria-pressed={permissionMode === mode}
             className={cn(
-              "rounded px-2 py-1 text-[11px] transition-colors",
+              "rounded px-2 py-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-[820px]:px-1.5",
               permissionMode === mode
                 ? "bg-primary/15 text-foreground"
                 : "hover:bg-white/5 hover:text-foreground",
@@ -69,7 +84,8 @@ export function StatusBar({
         onClick={compact}
         disabled={busy || compacting || used === 0}
         title="Resumir mensagens antigas agora (/compact)"
-        className="rounded px-1.5 py-0.5 transition-colors hover:bg-white/5 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+        aria-label={compacting ? "Resumindo contexto" : "Resumir contexto"}
+        className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40 disabled:hover:bg-transparent"
       >
         {compacting ? "Resumindo…" : "Resumir"}
       </button>
@@ -80,7 +96,7 @@ export function StatusBar({
         title="Painel de atividade do agente (Ctrl+`)"
         aria-pressed={outputOpen}
         className={cn(
-          "rounded px-1.5 py-0.5 transition-colors",
+          "shrink-0 rounded px-1.5 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           outputOpen
             ? "bg-sidebar-accent text-foreground"
             : "hover:bg-white/5 hover:text-foreground",
@@ -90,7 +106,6 @@ export function StatusBar({
       </button>
 
       <span className="flex-1" />
-
     </footer>
   );
 }

@@ -11,7 +11,11 @@ import { cn } from "../lib/utils";
  */
 export function GoalBanner(): React.JSX.Element | null {
   const goal = useStore((s) => s.goal);
+  const autoRunning = useStore((s) => s.goalAutoRunning);
   const setGoalStatus = useStore((s) => s.setGoalStatus);
+  const setGoalMaxRounds = useStore((s) => s.setGoalMaxRounds);
+  const startAutoGoal = useStore((s) => s.startAutoGoal);
+  const stopAutoGoal = useStore((s) => s.stopAutoGoal);
   const clearGoal = useStore((s) => s.clearGoal);
   const pushNotice = useStore((s) => s.pushNotice);
 
@@ -22,10 +26,23 @@ export function GoalBanner(): React.JSX.Element | null {
       ? "border-chart-5/40 bg-chart-5/5"
       : goal.status === "paused"
         ? "border-chart-3/40 bg-chart-3/5"
-        : "border-line bg-muted/40";
+        : goal.status === "blocked"
+          ? "border-destructive/40 bg-destructive/5"
+          : "border-line bg-muted/40";
 
   const label =
-    goal.status === "active" ? "Meta" : goal.status === "paused" ? "Meta · pausada" : "Meta · concluída";
+    goal.status === "active"
+      ? autoRunning
+        ? "Meta · executando"
+        : "Meta · ativa"
+      : goal.status === "paused"
+        ? "Meta · pausada"
+        : goal.status === "blocked"
+          ? "Meta · bloqueada"
+          : "Meta · concluída";
+  const roundOptions = [
+    ...new Set([1, 3, 5, 10, 20, 50, 100, goal.maxRounds]),
+  ].sort((a, b) => a - b);
 
   return (
     <div
@@ -45,14 +62,21 @@ export function GoalBanner(): React.JSX.Element | null {
         >
           {goal.text}
         </p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Rodadas automáticas: {goal.rounds}/{goal.maxRounds}
+        </p>
+        {goal.blockedReason ? (
+          <p className="mt-1 text-xs text-destructive">{goal.blockedReason}</p>
+        ) : null}
         {goal.notes.length > 0 ? (
           <button
             type="button"
             onClick={() =>
               pushNotice(
-                [`Notas de "${goal.text}":`, ...goal.notes.map((n, i) => `${i + 1}. ${n}`)].join(
-                  "\n",
-                ),
+                [
+                  `Notas de "${goal.text}":`,
+                  ...goal.notes.map((n, i) => `${i + 1}. ${n}`),
+                ].join("\n"),
               )
             }
             className="mt-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
@@ -62,15 +86,54 @@ export function GoalBanner(): React.JSX.Element | null {
         ) : null}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1">
-        {goal.status === "active" ? (
-          <BannerButton onClick={() => setGoalStatus("paused")}>Pausar</BannerButton>
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        {goal.status === "active" && autoRunning ? (
+          <BannerButton
+            onClick={stopAutoGoal}
+            title="Interromper e pausar a meta"
+          >
+            Parar
+          </BannerButton>
         ) : null}
-        {goal.status === "paused" ? (
-          <BannerButton onClick={() => setGoalStatus("active")}>Retomar</BannerButton>
+        {goal.status === "active" && !autoRunning ? (
+          <>
+            <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              Limite
+              <select
+                aria-label="Limite de rodadas automáticas"
+                value={goal.maxRounds}
+                onChange={(event) =>
+                  setGoalMaxRounds(Number(event.target.value))
+                }
+                className="rounded-md border border-line bg-background px-1.5 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              >
+                {roundOptions.map((rounds) => (
+                  <option key={rounds} value={rounds}>
+                    {rounds}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <BannerButton
+              onClick={() => startAutoGoal(goal.maxRounds)}
+              title="Executar a meta com limite de rodadas"
+            >
+              Continuar
+            </BannerButton>
+            <BannerButton onClick={() => setGoalStatus("paused")}>
+              Pausar
+            </BannerButton>
+          </>
         ) : null}
-        {goal.status !== "complete" ? (
-          <BannerButton onClick={() => setGoalStatus("complete")}>Concluir</BannerButton>
+        {goal.status === "paused" || goal.status === "blocked" ? (
+          <BannerButton onClick={() => setGoalStatus("active")}>
+            Retomar
+          </BannerButton>
+        ) : null}
+        {goal.status !== "complete" && !autoRunning ? (
+          <BannerButton onClick={() => setGoalStatus("complete")}>
+            Concluir
+          </BannerButton>
         ) : null}
         <BannerButton onClick={clearGoal} title="Apagar esta meta">
           Apagar

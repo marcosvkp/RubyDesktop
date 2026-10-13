@@ -10,10 +10,22 @@
  * therefore gets the engine's event *types* without pulling any engine code into
  * the browser bundle — the renderer must never import `@rubyclii/cli` at runtime.
  */
-import type { AgentEvent, Message, PermissionMode, SessionSummary } from "@rubyclii/cli";
+import type {
+  AgentEvent,
+  Message,
+  PermissionMode,
+  SessionEntry,
+  SessionSummary,
+} from "@rubyclii/cli";
 
 /** Re-exported so the renderer can name agent events without importing the engine. */
-export type { AgentEvent, Message, PermissionMode, SessionSummary };
+export type {
+  AgentEvent,
+  Message,
+  PermissionMode,
+  SessionEntry,
+  SessionSummary,
+};
 
 /** A model as reported by the Ruby catalog. */
 export interface ModelSummary {
@@ -36,18 +48,24 @@ export type SubAgentStatus =
   | "merged"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 
 export interface UserQuestionOption {
   label: string;
   description?: string;
 }
 
+export type UserQuestionSelectionMode = "single" | "multiple";
+export type UserQuestionAnswer = string | string[];
+
 export interface UserQuestionPrompt {
   id: string;
   header?: string;
   question: string;
   options: UserQuestionOption[];
+  /** Multiple questions are shown as separate pages. Omitted means single choice. */
+  selectionMode?: UserQuestionSelectionMode;
 }
 
 export interface UserQuestionRequest {
@@ -83,7 +101,13 @@ export interface SubAgentSummary {
   diff?: string;
   changedFiles?: string[];
   error?: string;
-  usage?: { inputTokens: number; outputTokens: number; cachedTokens: number; llmCalls: number; toolCalls: number };
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    llmCalls: number;
+    toolCalls: number;
+  };
 }
 
 /** Minimal metadata the renderer needs for slash-command completion. */
@@ -140,13 +164,16 @@ export interface GrantsSnapshot {
 
 // --- Goals ------------------------------------------------------------------
 
-export type GoalStatus = "active" | "paused" | "complete";
+export type GoalStatus = "active" | "paused" | "blocked" | "complete";
 
 /** A goal as the UI renders it. Mirrors the engine's on-disk `Goal`. */
 export interface GoalSummary {
   id: string;
   text: string;
   status: GoalStatus;
+  maxRounds: number;
+  rounds: number;
+  blockedReason?: string;
   notes: string[];
   createdAt: string;
   updatedAt: string;
@@ -179,7 +206,12 @@ export interface McpServerSummary {
  * renderer constructs this from form fields and must not depend on engine types.
  */
 export type McpServerDraft =
-  | { transport: "stdio"; command: string; args?: string[]; env?: Record<string, string> }
+  | {
+      transport: "stdio";
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    }
   | { transport: "http"; url: string; headers?: Record<string, string> };
 
 // --- Browser (the agent's controllable browser) -----------------------------
@@ -225,6 +257,19 @@ export interface BrowserResult {
   title?: string;
 }
 
+/** A browser tab the renderer may select or close. */
+export interface BrowserTabSummary {
+  id: string;
+  url: string;
+  title: string;
+}
+
+/** A recently opened workspace, persisted by the main process. */
+export interface RecentWorkspaceSummary {
+  path: string;
+  label: string;
+}
+
 // --- Metrics (the output panel) ---------------------------------------------
 
 /**
@@ -244,13 +289,18 @@ type MetricLinePayload =
       firstTokenLatencyMs?: number;
       cachedTokens?: number;
     }
-  | { kind: "tool"; name: string; latencyMs: number; success: boolean; outputBytes: number }
+  | {
+      kind: "tool";
+      name: string;
+      latencyMs: number;
+      success: boolean;
+      outputBytes: number;
+    }
   | { kind: "denied"; name: string; reason: string }
   | { kind: "guard"; guard: string; reason: string }
   | { kind: "compact"; trigger: string; detail: string };
 
 export type MetricLine = MetricLinePayload & { agentId?: string };
-
 
 // --- Engine protocol --------------------------------------------------------
 
@@ -273,7 +323,7 @@ export type EngineRequest =
   | {
       type: "userQuestionResponse";
       id: string;
-      answers: Record<string, string> | null;
+      answers: Record<string, UserQuestionAnswer> | null;
     }
   | {
       type: "subAgentConfigResponse";
@@ -283,13 +333,20 @@ export type EngineRequest =
       reasoningEffort?: ReasoningEffort;
       instructions?: string;
     }
-  | { type: "subAgentReviewResponse"; id: string; action: "merge" | "discard" | "cancel" }
+  | {
+      type: "subAgentReviewResponse";
+      id: string;
+      action: "merge" | "discard" | "cancel";
+    }
   | { type: "compact" }
   | { type: "session"; action: "new" | "resume"; sessionId?: string }
   | { type: "goal"; action: "get" }
   | { type: "goal"; action: "set"; text: string }
   | { type: "goal"; action: "note"; text: string }
   | { type: "goal"; action: "status"; status: GoalStatus }
+  | { type: "goal"; action: "maxRounds"; maxRounds: number }
+  | { type: "goal"; action: "auto"; maxRounds?: number }
+  | { type: "goal"; action: "stopAuto" }
   | { type: "goal"; action: "clear" }
   | { type: "mcp"; action: "refresh" }
   | { type: "mcp"; action: "add"; name: string; config: McpServerDraft }
@@ -333,31 +390,65 @@ export type EngineResponse =
       type: "sessions";
       sessions: SessionSummary[];
       currentSessionId?: string;
-      /** Present when the active session changed and the renderer should replace its transcript. */
-      history?: Message[];
+      /** Ordered session log, including host UI annotations, for rebuilding the visible transcript. */
+      transcript?: SessionEntry[];
     }
   | { type: "status"; status: EngineStatus }
   | { type: "event"; event: AgentEvent }
-  | { type: "usage"; inputTokens: number; outputTokens: number; contextWindow: number }
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      contextWindow: number;
+    }
   | { type: "approvalRequest"; request: ApprovalRequest }
   /** Sent after a response lands, so the modal can clear and the list can update. */
-  | { type: "approvalResolved"; id: string; decision: ApprovalDecision; scope: ApprovalScope }
+  | {
+      type: "approvalResolved";
+      id: string;
+      decision: ApprovalDecision;
+      scope: ApprovalScope;
+    }
   | { type: "userQuestionRequest"; request: UserQuestionRequest }
   | { type: "userQuestionResolved"; id: string; cancelled: boolean }
   | { type: "subAgentConfigRequest"; request: SubAgentConfigRequest }
-  | { type: "subAgentConfigResolved"; id: string; action: "start" | "cancel" }
+  | {
+      type: "subAgentConfigResolved";
+      id: string;
+      action: "start" | "cancel";
+      config?: {
+        model: string;
+        reasoningEffort?: ReasoningEffort;
+        instructions: string;
+      };
+    }
   | { type: "subAgentUpdate"; agent: SubAgentSummary }
   | { type: "permissionMode"; mode: PermissionMode }
   | { type: "grants"; grants: GrantsSnapshot }
   | { type: "goal"; goal: GoalSummary | null }
+  | { type: "goalAuto"; running: boolean }
+  | { type: "workflowEvent"; event: import("@rubyclii/cli").WorkflowEvent }
   | { type: "mcp"; servers: McpServerSummary[] }
   /** The result of testing one server; does not change the running registry. */
   | { type: "mcpTest"; server: McpServerSummary }
   | { type: "metric"; line: MetricLine }
   /** A browser tool call from the engine, to be performed by the main process. */
-  | { type: "browserRequest"; id: string; method: BrowserMethod; params: unknown }
+  | {
+      type: "browserRequest";
+      id: string;
+      method: BrowserMethod;
+      params: unknown;
+    }
   /** The browser panel opened, closed or changed page. */
-  | { type: "browserState"; open: boolean; url?: string; title?: string }
+  | {
+      type: "browserState";
+      open: boolean;
+      url?: string;
+      title?: string;
+      activeTabId?: string;
+      tabs?: BrowserTabSummary[];
+    }
+  | { type: "workspaceRecents"; workspaces: RecentWorkspaceSummary[] }
   | { type: "compacting"; active: boolean }
   | { type: "error"; message: string }
   | { type: "fatal"; message: string };
@@ -373,6 +464,8 @@ export interface RubyDesktopApi {
   getWorkspace(): Promise<string>;
   /** Open a native directory picker. Resolves to undefined if the user cancelled. */
   pickWorkspace(): Promise<string | undefined>;
+  /** Read the most recently opened workspaces. */
+  getRecentWorkspaces(): Promise<RecentWorkspaceSummary[]>;
   /** Switch workspace. The engine restarts with the new directory as its cwd. */
   setWorkspace(path: string): void;
   /** Engine lifecycle + model catalog snapshot. */
@@ -397,15 +490,25 @@ export interface RubyDesktopApi {
     grantKey?: GrantKeyKind,
   ): void;
   /** Answer an interactive question from the main agent or a sub-agent. */
-  respondUserQuestion(id: string, answers: Record<string, string> | null): void;
+  respondUserQuestion(
+    id: string,
+    answers: Record<string, UserQuestionAnswer> | null,
+  ): void;
   /** Approve or cancel an agent configuration proposed by the orchestrator. */
   respondSubAgentConfig(
     id: string,
     action: "start" | "cancel",
-    config?: { model: string; reasoningEffort?: ReasoningEffort; instructions: string },
+    config?: {
+      model: string;
+      reasoningEffort?: ReasoningEffort;
+      instructions: string;
+    },
   ): void;
   /** Approve applying a worker's diff or discard the isolated worktree. */
-  respondSubAgentReview(id: string, action: "merge" | "discard" | "cancel"): void;
+  respondSubAgentReview(
+    id: string,
+    action: "merge" | "discard" | "cancel",
+  ): void;
   /** Compact the conversation now. */
   compact(): void;
   /** Create a new conversation for the current workspace. */
@@ -420,6 +523,11 @@ export interface RubyDesktopApi {
   noteGoal(text: string): void;
   /** Pause, resume or complete the goal. */
   setGoalStatus(status: GoalStatus): void;
+  /** Set the bounded automatic continuation limit for the current goal. */
+  setGoalMaxRounds(maxRounds: number): void;
+  /** Start or stop automatic continuation of the current active goal. */
+  startAutoGoal(maxRounds?: number): void;
+  stopAutoGoal(): void;
   /** Delete the goal. */
   clearGoal(): void;
   /** Re-read mcp.json, reconnect every server and report their tools. */
@@ -432,6 +540,12 @@ export interface RubyDesktopApi {
   testMcpServer(name: string, config: McpServerDraft): void;
   /** Show the embedded browser. The main process owns the view and its bounds. */
   openBrowser(url?: string): void;
+  /** Create a new browser tab and make it active. */
+  newBrowserTab(url?: string): void;
+  /** Select a browser tab to show and make the agent's browser target. */
+  selectBrowserTab(id: string): void;
+  /** Close one browser tab; closing the last tab closes the browser. */
+  closeBrowserTab(id: string): void;
   /** Hide and destroy the embedded browser view. */
   closeBrowser(): void;
   /**
@@ -440,7 +554,12 @@ export interface RubyDesktopApi {
    * Only the renderer knows the layout, so it measures the placeholder it reserved
    * and reports the rectangle; the view is then positioned to match exactly.
    */
-  setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): void;
+  setBrowserBounds(bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): void;
   /** Clear the conversation and start a fresh session. */
   reset(): void;
   /** Ask the engine to refresh its model catalog. */
@@ -454,6 +573,7 @@ export const IPC = {
   /** Renderer → main, request/response. */
   invoke: {
     getWorkspace: "ruby:get-workspace",
+    getRecentWorkspaces: "ruby:get-recent-workspaces",
     pickWorkspace: "ruby:pick-workspace",
     getEngineInfo: "ruby:get-engine-info",
     saveApiKey: "ruby:save-api-key",
@@ -477,12 +597,18 @@ export const IPC = {
     setGoal: "ruby:set-goal",
     noteGoal: "ruby:note-goal",
     setGoalStatus: "ruby:set-goal-status",
+    setGoalMaxRounds: "ruby:set-goal-max-rounds",
+    startAutoGoal: "ruby:start-auto-goal",
+    stopAutoGoal: "ruby:stop-auto-goal",
     clearGoal: "ruby:clear-goal",
     refreshMcp: "ruby:refresh-mcp",
     addMcpServer: "ruby:add-mcp-server",
     removeMcpServer: "ruby:remove-mcp-server",
     testMcpServer: "ruby:test-mcp-server",
     openBrowser: "ruby:open-browser",
+    newBrowserTab: "ruby:new-browser-tab",
+    selectBrowserTab: "ruby:select-browser-tab",
+    closeBrowserTab: "ruby:close-browser-tab",
     closeBrowser: "ruby:close-browser",
     setBrowserBounds: "ruby:set-browser-bounds",
     reset: "ruby:reset",

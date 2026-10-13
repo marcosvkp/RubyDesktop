@@ -12,31 +12,58 @@ export function SubAgentConfigCard({
   const models = useStore((s) => s.models);
   const respond = useStore((s) => s.respondSubAgentConfig);
   const [model, setModel] = useState(item.request.proposedModel);
-  const [effort, setEffort] = useState(item.request.proposedReasoningEffort ?? "");
-  const [instructions, setInstructions] = useState(item.request.proposedInstructions);
+  const [effort, setEffort] = useState(
+    item.request.proposedReasoningEffort ?? "",
+  );
+  const [instructions, setInstructions] = useState(
+    item.request.proposedInstructions,
+  );
   const [mode, setMode] = useState<"choose" | "manual">("choose");
-  const selectedModel = useMemo(() => models.find((entry) => entry.id === model), [models, model]);
+  const displayedModel = item.resolved?.model ?? model;
+  const displayedEffort = item.resolved?.reasoningEffort ?? effort;
+  const displayedInstructions = item.resolved?.instructions ?? instructions;
+  const selectedModel = useMemo(
+    () => models.find((entry) => entry.id === displayedModel),
+    [models, displayedModel],
+  );
   const efforts = selectedModel?.reasoningEfforts ?? [];
   const pending = item.status === "pending";
 
-  const startAgent = (selectedModel: string, selectedEffort: string, selectedInstructions: string): void => {
+  const startAgent = (
+    selectedModel: string,
+    selectedEffort: string,
+    selectedInstructions: string,
+  ): void => {
     respond(item.id, "start", {
       model: selectedModel,
-      ...(selectedEffort ? { reasoningEffort: selectedEffort as "low" | "medium" | "high" } : {}),
+      ...(selectedEffort
+        ? { reasoningEffort: selectedEffort as "low" | "medium" | "high" }
+        : {}),
       instructions: selectedInstructions,
     });
   };
 
   return (
-    <section className="rounded-xl border border-line bg-card p-4 shadow-lg shadow-black/10">
+    <section
+      data-testid="subagent-config-card"
+      className="rounded-xl border border-line bg-card p-4 shadow-lg shadow-black/10"
+    >
       <header className="mb-3 flex items-start gap-2.5">
         <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-chart-5/10 text-chart-5">
           <Bot className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold text-foreground">Configurar subagente</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            Configurar subagente
+          </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            O orquestrador propôs este agente. Inicie com a recomendação ou revise os parâmetros.
+            {pending
+              ? "O orquestrador propôs este agente. Inicie com a recomendação ou revise os parâmetros."
+              : item.status === "started"
+                ? "O subagente foi iniciado com os parâmetros registrados abaixo."
+                : item.status === "interrupted"
+                  ? "A solicitação foi interrompida ao fechar o app."
+                  : "A solicitação foi cancelada."}
           </p>
         </div>
         <span className="rounded-full border border-line px-2 py-0.5 text-[10px] capitalize text-muted-foreground">
@@ -46,7 +73,9 @@ export function SubAgentConfigCard({
 
       <div className="space-y-3 pl-9">
         <div>
-          <p className="text-sm font-medium text-foreground">{item.request.title}</p>
+          <p className="text-sm font-medium text-foreground">
+            {item.request.title}
+          </p>
           <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
             {item.request.prompt}
           </p>
@@ -66,21 +95,28 @@ export function SubAgentConfigCard({
             <div className="grid gap-2 text-xs sm:grid-cols-2">
               <div>
                 <span className="text-muted-foreground">Modelo</span>
-                <p className="mt-0.5 truncate font-medium text-foreground" title={selectedModel?.label ?? model}>
-                  {selectedModel?.label ?? model}
+                <p
+                  className="mt-0.5 truncate font-medium text-foreground"
+                  title={selectedModel?.label ?? displayedModel}
+                >
+                  {selectedModel?.label ?? displayedModel}
                 </p>
               </div>
               <div>
                 <span className="text-muted-foreground">Reasoning effort</span>
-                <p className="mt-0.5 font-medium text-foreground">{effort || "Padrão do modelo"}</p>
+                <p className="mt-0.5 font-medium text-foreground">
+                  {displayedEffort || "Padrão do modelo"}
+                </p>
               </div>
             </div>
-            {instructions.trim() ? (
+            {displayedInstructions.trim() ? (
               <p className="max-h-20 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-                {instructions}
+                {displayedInstructions}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground">Sem orientações adicionais.</p>
+              <p className="text-xs text-muted-foreground">
+                Sem orientações adicionais.
+              </p>
             )}
             {pending ? (
               <div className="flex flex-wrap justify-end gap-2 pt-1">
@@ -102,7 +138,13 @@ export function SubAgentConfigCard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => startAgent(item.request.proposedModel, item.request.proposedReasoningEffort ?? "", item.request.proposedInstructions)}
+                  onClick={() =>
+                    startAgent(
+                      item.request.proposedModel,
+                      item.request.proposedReasoningEffort ?? "",
+                      item.request.proposedInstructions,
+                    )
+                  }
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
                 >
                   <Play className="h-3.5 w-3.5" />
@@ -111,7 +153,11 @@ export function SubAgentConfigCard({
               </div>
             ) : (
               <p className="text-right text-xs text-muted-foreground">
-                {item.status === "started" ? "Configuração enviada; aguardando início…" : "Solicitação cancelada."}
+                {item.status === "started"
+                  ? "Configuração confirmada."
+                  : item.status === "interrupted"
+                    ? "Solicitação interrompida ao fechar o app."
+                    : "Solicitação cancelada."}
               </p>
             )}
           </div>
@@ -121,7 +167,7 @@ export function SubAgentConfigCard({
               <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Modelo
                 <select
-                  value={model}
+                  value={displayedModel}
                   disabled={!pending || models.length === 0}
                   onChange={(event) => {
                     setModel(event.target.value);
@@ -139,9 +185,11 @@ export function SubAgentConfigCard({
               <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Reasoning effort
                 <select
-                  value={effort}
+                  value={displayedEffort}
                   disabled={!pending || efforts.length === 0}
-                  onChange={(event) => setEffort(event.target.value as typeof effort)}
+                  onChange={(event) =>
+                    setEffort(event.target.value as typeof effort)
+                  }
                   className="block w-full rounded-lg border border-line bg-background px-2.5 py-2 text-xs font-normal normal-case tracking-normal text-foreground focus:border-ring/60 focus:outline-none disabled:opacity-50"
                 >
                   <option value="">Padrão do modelo</option>
@@ -152,7 +200,9 @@ export function SubAgentConfigCard({
                   ))}
                 </select>
                 {selectedModel && efforts.length === 0 ? (
-                  <span className="block normal-case tracking-normal">Este modelo não expõe effort.</span>
+                  <span className="block normal-case tracking-normal">
+                    Este modelo não expõe effort.
+                  </span>
                 ) : null}
               </label>
             </div>
@@ -160,7 +210,7 @@ export function SubAgentConfigCard({
             <label className="block space-y-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Orientações do agente
               <textarea
-                value={instructions}
+                value={displayedInstructions}
                 disabled={!pending}
                 onChange={(event) => setInstructions(event.target.value)}
                 rows={3}
@@ -201,7 +251,11 @@ export function SubAgentConfigCard({
               </div>
             ) : (
               <p className="text-right text-xs text-muted-foreground">
-                {item.status === "started" ? "Configuração enviada; aguardando início…" : "Solicitação cancelada."}
+                {item.status === "started"
+                  ? "Configuração confirmada."
+                  : item.status === "interrupted"
+                    ? "Solicitação interrompida ao fechar o app."
+                    : "Solicitação cancelada."}
               </p>
             )}
           </>

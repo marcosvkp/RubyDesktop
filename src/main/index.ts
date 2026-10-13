@@ -6,11 +6,19 @@
  * engine goes through the `EngineRequest` protocol, so there is exactly one path
  * to the agent and the renderer cannot reach it any other way.
  */
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, utilityProcess } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  safeStorage,
+  shell,
+  utilityProcess,
+} from "electron";
 import { autoUpdater } from "electron-updater";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { BrowserController } from "./browser.js";
 import { createBrowserService } from "./browser-service.js";
@@ -23,6 +31,8 @@ import type {
   GoalStatus,
   McpServerDraft,
   PermissionMode,
+  RecentWorkspaceSummary,
+  UserQuestionAnswer,
 } from "@shared/ipc";
 import { IPC } from "@shared/ipc";
 
@@ -46,6 +56,80 @@ function resolveWorkspace(): string {
 }
 
 let workspace = "";
+let recentWorkspaces: RecentWorkspaceSummary[] = [];
+let recentWorkspaceWrite: Promise<void> = Promise.resolve();
+
+function recentWorkspacesPath(): string {
+  return join(app.getPath("userData"), "recent-workspaces.json");
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function workspaceKey(path: string): string {
+  const absolute = resolve(path);
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
+async function loadRecentWorkspaces(): Promise<RecentWorkspaceSummary[]> {
+  try {
+    const raw: unknown = JSON.parse(
+      await readFile(recentWorkspacesPath(), "utf8"),
+    );
+    if (!Array.isArray(raw)) return [];
+    const entries = raw.filter(
+      (entry): entry is RecentWorkspaceSummary =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "path" in entry &&
+        typeof entry.path === "string" &&
+        isDirectory(entry.path),
+    );
+    const unique = new Map<string, RecentWorkspaceSummary>();
+    for (const entry of entries) {
+      const path = resolve(entry.path);
+      unique.set(workspaceKey(path), { path, label: basename(path) || path });
+    }
+    return [...unique.values()].slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
+/** Keep the small history in app-owned storage; the renderer only sees paths. */
+function rememberWorkspace(path: string): void {
+  if (!isDirectory(path)) return;
+  const absolute = resolve(path);
+  const key = workspaceKey(absolute);
+  recentWorkspaces = [
+    { path: absolute, label: basename(absolute) || absolute },
+    ...recentWorkspaces.filter((entry) => workspaceKey(entry.path) !== key),
+  ].slice(0, 8);
+  sendToRenderer({ type: "workspaceRecents", workspaces: recentWorkspaces });
+
+  recentWorkspaceWrite = recentWorkspaceWrite
+    .then(async () => {
+      const target = recentWorkspacesPath();
+      const temporary = `${target}.tmp`;
+      await mkdir(app.getPath("userData"), { recursive: true });
+      await writeFile(
+        temporary,
+        JSON.stringify(recentWorkspaces, null, 2),
+        "utf8",
+      );
+      await rename(temporary, target);
+    })
+    .catch((error: unknown) => {
+      console.error(
+        `[workspace history] ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+}
 
 /** The engine is a normal file in the install; dev builds keep it beside `out/main`. */
 function engineEntry(): string {
@@ -55,8 +139,13 @@ function engineEntry(): string {
 
 /** Enables updates only for builds that contain a generated GitHub feed config. */
 function startAutoUpdates(): void {
-  if (!app.isPackaged || !existsSync(join(process.resourcesPath, "app-update.yml"))) return;
-  if (process.platform === "darwin" && !__RUBY_DESKTOP_MAC_AUTO_UPDATES__) return;
+  if (
+    !app.isPackaged ||
+    !existsSync(join(process.resourcesPath, "app-update.yml"))
+  )
+    return;
+  if (process.platform === "darwin" && !__RUBY_DESKTOP_MAC_AUTO_UPDATES__)
+    return;
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -68,15 +157,17 @@ function startAutoUpdates(): void {
       type: "info" as const,
       title: "Ruby Desktop atualizado",
       message: `A versão ${info.version} foi baixada e está pronta para instalar.`,
-      detail: "Escolha Reiniciar agora para aplicar já, ou Depois para instalar ao encerrar o app.",
+      detail:
+        "Escolha Reiniciar agora para aplicar já, ou Depois para instalar ao encerrar o app.",
       buttons: ["Reiniciar agora", "Depois"],
       defaultId: 0,
       cancelId: 1,
       noLink: true,
     };
-    const prompt = mainWindow && !mainWindow.isDestroyed()
-      ? dialog.showMessageBox(mainWindow, options)
-      : dialog.showMessageBox(options);
+    const prompt =
+      mainWindow && !mainWindow.isDestroyed()
+        ? dialog.showMessageBox(mainWindow, options)
+        : dialog.showMessageBox(options);
     void prompt.then(({ response }) => {
       if (response === 0) autoUpdater.quitAndInstall();
     });
@@ -85,7 +176,9 @@ function startAutoUpdates(): void {
   // A brief delay lets the first window settle before the updater contacts GitHub.
   setTimeout(() => {
     void autoUpdater.checkForUpdates().catch((error: unknown) => {
-      console.error(`[updates] ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `[updates] ${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   }, 15_000);
 }
@@ -229,6 +322,8 @@ function reportBrowserState(): void {
     open: browser.isOpen,
     url: info?.url,
     title: info?.title,
+    activeTabId: browser.activeTab,
+    tabs: browser.listTabs(),
   });
 }
 
@@ -238,12 +333,16 @@ const browserService = createBrowserService({
     return join(app.getPath("userData"), "browser-screenshots");
   },
   onState: reportBrowserState,
-  reply: (id, ok, result, error) => post({ type: "browserResult", id, ok, result, error }),
+  reply: (id, ok, result, error) =>
+    post({ type: "browserResult", id, ok, result, error }),
   onUserError: (message) => sendToRenderer({ type: "error", message }),
   // The agent can open the browser before the panel has measured itself; a
   // zero-sized view silently swallows clicks, so fall back to the right half.
   defaultBounds: () => {
-    const { width, height } = mainWindow?.getContentBounds() ?? { width: 1440, height: 920 };
+    const { width, height } = mainWindow?.getContentBounds() ?? {
+      width: 1440,
+      height: 920,
+    };
     const panel = Math.max(360, Math.round(width * 0.46));
     return { x: width - panel, y: 0, width: panel, height };
   },
@@ -258,9 +357,20 @@ const browserService = createBrowserService({
  * workspaces because the process that holds it is replaced.
  */
 function switchWorkspace(next: string): void {
-  if (!existsSync(next) || next === workspace) return;
+  if (typeof next !== "string" || !isDirectory(next)) {
+    sendToRenderer({
+      type: "error",
+      message: "A pasta selecionada não está disponível.",
+    });
+    return;
+  }
+  const absolute = resolve(next);
+  rememberWorkspace(absolute);
+  if (workspaceKey(absolute) === workspaceKey(workspace)) return;
   stopEngine();
-  workspace = next;
+  browser.close();
+  workspace = absolute;
+  reportBrowserState();
   sendToRenderer({ type: "status", status: "starting" });
   void startEngine();
 }
@@ -269,8 +379,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: 760,
+    minHeight: 520,
     show: false,
     // Matches --background in the theme, so there is no white flash before the
     // renderer paints.
@@ -314,6 +424,7 @@ function createWindow(): void {
 // --- IPC --------------------------------------------------------------------
 
 ipcMain.handle(IPC.invoke.getWorkspace, () => workspace);
+ipcMain.handle(IPC.invoke.getRecentWorkspaces, () => recentWorkspaces);
 
 ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
   const options: Electron.OpenDialogOptions = {
@@ -335,7 +446,10 @@ ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
     return { ok: false, error: "Pare o turno atual antes de trocar a chave." };
   }
   if (!safeStorage.isEncryptionAvailable()) {
-    return { ok: false, error: "O cofre seguro do sistema não está disponível nesta sessão." };
+    return {
+      ok: false,
+      error: "O cofre seguro do sistema não está disponível nesta sessão.",
+    };
   }
   const trimmed = typeof key === "string" ? key.trim() : "";
   if (!trimmed) return { ok: false, error: "Informe uma chave de API válida." };
@@ -343,7 +457,9 @@ ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
   const target = apiKeyPath();
   const temporary = `${target}.tmp`;
   try {
-    await writeFile(temporary, safeStorage.encryptString(trimmed), { mode: 0o600 });
+    await writeFile(temporary, safeStorage.encryptString(trimmed), {
+      mode: 0o600,
+    });
     await rename(temporary, target);
     stopEngine();
     await startEngine();
@@ -352,18 +468,25 @@ ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
     await rm(temporary, { force: true }).catch(() => {});
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "Não foi possível salvar a chave.",
+      error:
+        err instanceof Error ? err.message : "Não foi possível salvar a chave.",
     };
   }
 });
 
-ipcMain.on(IPC.send.prompt, (_event, text: string) => post({ type: "prompt", text }));
+ipcMain.on(IPC.send.prompt, (_event, text: string) =>
+  post({ type: "prompt", text }),
+);
 ipcMain.on(IPC.send.activateSkill, (_event, name: string, args: string) =>
   post({ type: "activateSkill", name, args }),
 );
 ipcMain.on(IPC.send.abort, () => post({ type: "abort" }));
-ipcMain.on(IPC.send.setWorkspace, (_event, path: string) => switchWorkspace(path));
-ipcMain.on(IPC.send.setModel, (_event, model: string) => post({ type: "setModel", model }));
+ipcMain.on(IPC.send.setWorkspace, (_event, path: string) =>
+  switchWorkspace(path),
+);
+ipcMain.on(IPC.send.setModel, (_event, model: string) =>
+  post({ type: "setModel", model }),
+);
 ipcMain.on(IPC.send.setPermissionMode, (_event, mode: PermissionMode) =>
   post({ type: "setPermissionMode", mode }),
 );
@@ -377,19 +500,28 @@ ipcMain.on(
     grantKey?: GrantKeyKind,
   ) => post({ type: "approvalResponse", id, decision, scope, grantKey }),
 );
-ipcMain.on(IPC.send.userQuestionResponse, (_event, id: string, answers: Record<string, string> | null) =>
-  post({ type: "userQuestionResponse", id, answers }),
+ipcMain.on(
+  IPC.send.userQuestionResponse,
+  (_event, id: string, answers: Record<string, UserQuestionAnswer> | null) =>
+    post({ type: "userQuestionResponse", id, answers }),
 );
 ipcMain.on(
   IPC.send.subAgentConfigResponse,
-  (_event, id: string, action: "start" | "cancel", config?: {
-    model: string;
-    reasoningEffort?: import("@shared/ipc").ReasoningEffort;
-    instructions: string;
-  }) => post({ type: "subAgentConfigResponse", id, action, ...config }),
+  (
+    _event,
+    id: string,
+    action: "start" | "cancel",
+    config?: {
+      model: string;
+      reasoningEffort?: import("@shared/ipc").ReasoningEffort;
+      instructions: string;
+    },
+  ) => post({ type: "subAgentConfigResponse", id, action, ...config }),
 );
-ipcMain.on(IPC.send.subAgentReviewResponse, (_event, id: string, action: "merge" | "discard" | "cancel") =>
-  post({ type: "subAgentReviewResponse", id, action }),
+ipcMain.on(
+  IPC.send.subAgentReviewResponse,
+  (_event, id: string, action: "merge" | "discard" | "cancel") =>
+    post({ type: "subAgentReviewResponse", id, action }),
 );
 ipcMain.on(IPC.send.compact, () => post({ type: "compact" }));
 ipcMain.on(IPC.send.newSession, () => post({ type: "session", action: "new" }));
@@ -397,23 +529,38 @@ ipcMain.on(IPC.send.resumeSession, (_event, sessionId: string) =>
   post({ type: "session", action: "resume", sessionId }),
 );
 ipcMain.on(IPC.send.getGoal, () => post({ type: "goal", action: "get" }));
-ipcMain.on(IPC.send.setGoal, (_event, text: string) => post({ type: "goal", action: "set", text }));
+ipcMain.on(IPC.send.setGoal, (_event, text: string) =>
+  post({ type: "goal", action: "set", text }),
+);
 ipcMain.on(IPC.send.noteGoal, (_event, text: string) =>
   post({ type: "goal", action: "note", text }),
 );
 ipcMain.on(IPC.send.setGoalStatus, (_event, status: GoalStatus) =>
   post({ type: "goal", action: "status", status }),
 );
+ipcMain.on(IPC.send.setGoalMaxRounds, (_event, maxRounds: number) =>
+  post({ type: "goal", action: "maxRounds", maxRounds }),
+);
+ipcMain.on(IPC.send.startAutoGoal, (_event, maxRounds?: number) =>
+  post({ type: "goal", action: "auto", maxRounds }),
+);
+ipcMain.on(IPC.send.stopAutoGoal, () =>
+  post({ type: "goal", action: "stopAuto" }),
+);
 ipcMain.on(IPC.send.clearGoal, () => post({ type: "goal", action: "clear" }));
 ipcMain.on(IPC.send.refreshMcp, () => post({ type: "mcp", action: "refresh" }));
-ipcMain.on(IPC.send.addMcpServer, (_event, name: string, config: McpServerDraft) =>
-  post({ type: "mcp", action: "add", name, config }),
+ipcMain.on(
+  IPC.send.addMcpServer,
+  (_event, name: string, config: McpServerDraft) =>
+    post({ type: "mcp", action: "add", name, config }),
 );
 ipcMain.on(IPC.send.removeMcpServer, (_event, name: string) =>
   post({ type: "mcp", action: "remove", name }),
 );
-ipcMain.on(IPC.send.testMcpServer, (_event, name: string, config: McpServerDraft) =>
-  post({ type: "mcp", action: "test", name, config }),
+ipcMain.on(
+  IPC.send.testMcpServer,
+  (_event, name: string, config: McpServerDraft) =>
+    post({ type: "mcp", action: "test", name, config }),
 );
 
 ipcMain.on(IPC.send.openBrowser, (_event, url?: string) => {
@@ -430,6 +577,32 @@ ipcMain.on(IPC.send.openBrowser, (_event, url?: string) => {
       });
     });
   }
+});
+
+ipcMain.on(IPC.send.newBrowserTab, (_event, url?: string) => {
+  browser.newTab(browserBounds);
+  browserService.setBounds(browserBounds);
+  reportBrowserState();
+  if (url) {
+    void browser.navigate(url).then(reportBrowserState, (err: unknown) => {
+      sendToRenderer({
+        type: "error",
+        message: `Could not open ${url}: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    });
+  }
+});
+
+ipcMain.on(IPC.send.selectBrowserTab, (_event, id: string) => {
+  if (typeof id !== "string") return;
+  browser.selectTab(id, browserBounds);
+  reportBrowserState();
+});
+
+ipcMain.on(IPC.send.closeBrowserTab, (_event, id: string) => {
+  if (typeof id !== "string") return;
+  browser.closeTab(id, browserBounds);
+  reportBrowserState();
 });
 
 ipcMain.on(IPC.send.closeBrowser, () => {
@@ -451,13 +624,17 @@ ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 // --- Lifecycle --------------------------------------------------------------
 
 void app.whenReady().then(() => {
-  workspace = resolveWorkspace();
-  createWindow();
-  void startEngine();
-  startAutoUpdates();
+  return loadRecentWorkspaces().then((recent) => {
+    recentWorkspaces = recent;
+    workspace = resolveWorkspace();
+    rememberWorkspace(workspace);
+    createWindow();
+    void startEngine();
+    startAutoUpdates();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
 });
 

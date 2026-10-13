@@ -14,6 +14,8 @@ import { IPC } from "@shared/ipc";
 const api: RubyDesktopApi = {
   getWorkspace: () => ipcRenderer.invoke(IPC.invoke.getWorkspace),
 
+  getRecentWorkspaces: () => ipcRenderer.invoke(IPC.invoke.getRecentWorkspaces),
+
   pickWorkspace: () => ipcRenderer.invoke(IPC.invoke.pickWorkspace),
 
   setWorkspace: (path) => ipcRenderer.send(IPC.send.setWorkspace, path),
@@ -24,13 +26,15 @@ const api: RubyDesktopApi = {
 
   sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),
 
-  activateSkill: (name, args) => ipcRenderer.send(IPC.send.activateSkill, name, args),
+  activateSkill: (name, args) =>
+    ipcRenderer.send(IPC.send.activateSkill, name, args),
 
   abort: () => ipcRenderer.send(IPC.send.abort),
 
   setModel: (model) => ipcRenderer.send(IPC.send.setModel, model),
 
-  setPermissionMode: (mode) => ipcRenderer.send(IPC.send.setPermissionMode, mode),
+  setPermissionMode: (mode) =>
+    ipcRenderer.send(IPC.send.setPermissionMode, mode),
 
   respondApproval: (id, decision, scope, grantKey) =>
     ipcRenderer.send(IPC.send.approvalResponse, id, decision, scope, grantKey),
@@ -48,7 +52,8 @@ const api: RubyDesktopApi = {
 
   newSession: () => ipcRenderer.send(IPC.send.newSession),
 
-  resumeSession: (sessionId) => ipcRenderer.send(IPC.send.resumeSession, sessionId),
+  resumeSession: (sessionId) =>
+    ipcRenderer.send(IPC.send.resumeSession, sessionId),
 
   getGoal: () => ipcRenderer.send(IPC.send.getGoal),
 
@@ -58,21 +63,38 @@ const api: RubyDesktopApi = {
 
   setGoalStatus: (status) => ipcRenderer.send(IPC.send.setGoalStatus, status),
 
+  setGoalMaxRounds: (maxRounds) =>
+    ipcRenderer.send(IPC.send.setGoalMaxRounds, maxRounds),
+
+  startAutoGoal: (maxRounds) =>
+    ipcRenderer.send(IPC.send.startAutoGoal, maxRounds),
+
+  stopAutoGoal: () => ipcRenderer.send(IPC.send.stopAutoGoal),
+
   clearGoal: () => ipcRenderer.send(IPC.send.clearGoal),
 
   refreshMcp: () => ipcRenderer.send(IPC.send.refreshMcp),
 
-  addMcpServer: (name, config) => ipcRenderer.send(IPC.send.addMcpServer, name, config),
+  addMcpServer: (name, config) =>
+    ipcRenderer.send(IPC.send.addMcpServer, name, config),
 
   removeMcpServer: (name) => ipcRenderer.send(IPC.send.removeMcpServer, name),
 
-  testMcpServer: (name, config) => ipcRenderer.send(IPC.send.testMcpServer, name, config),
+  testMcpServer: (name, config) =>
+    ipcRenderer.send(IPC.send.testMcpServer, name, config),
 
   openBrowser: (url) => ipcRenderer.send(IPC.send.openBrowser, url),
 
+  newBrowserTab: (url) => ipcRenderer.send(IPC.send.newBrowserTab, url),
+
+  selectBrowserTab: (id) => ipcRenderer.send(IPC.send.selectBrowserTab, id),
+
+  closeBrowserTab: (id) => ipcRenderer.send(IPC.send.closeBrowserTab, id),
+
   closeBrowser: () => ipcRenderer.send(IPC.send.closeBrowser),
 
-  setBrowserBounds: (bounds) => ipcRenderer.send(IPC.send.setBrowserBounds, bounds),
+  setBrowserBounds: (bounds) =>
+    ipcRenderer.send(IPC.send.setBrowserBounds, bounds),
 
   reset: () => ipcRenderer.send(IPC.send.reset),
 
@@ -82,7 +104,8 @@ const api: RubyDesktopApi = {
     // The raw IpcRendererEvent is intentionally not forwarded: it exposes
     // `sender`, which would hand the renderer a channel back into the main
     // process and defeat the point of the bridge.
-    const listener = (_event: unknown, message: EngineResponse): void => handler(message);
+    const listener = (_event: unknown, message: EngineResponse): void =>
+      handler(message);
     ipcRenderer.on(IPC.engineMessage, listener);
     return () => ipcRenderer.removeListener(IPC.engineMessage, listener);
   },

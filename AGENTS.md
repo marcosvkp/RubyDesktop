@@ -29,9 +29,9 @@ This is the thing most likely to trip you up.
 - **After changing anything in RubyCLI, run `npm run build` there.** Otherwise
   `dist/lib.d.ts` goes stale and the Desktop's typecheck fails with
   `has no exported member 'X'`, which looks like a Desktop bug and is not.
-- The engine is the right place for anything about *how the agent works*
-  (tools, permissions policy, MCP, compaction, goals). This repo is for *how it is
-  presented and hosted*.
+- The engine is the right place for anything about _how the agent works_
+  (tools, permissions policy, MCP, compaction, goals). This repo is for _how it is
+  presented and hosted_.
 - Keep `RubyCLI`'s own `AGENTS.md` conventions in mind when editing it: it has
   layering rules (`tools/` never imports `core/`), a Prettier/ESLint gate, and a
   vitest suite that must stay green.
@@ -148,7 +148,7 @@ scripts/
 
 ## Conventions
 
-- **Comments explain *why*, not *what*.** Several files carry a paragraph at the top
+- **Comments explain _why_, not _what_.** Several files carry a paragraph at the top
   saying what the module is for and what it must not do. Match that.
 - **Design tokens come from the site.** `src/renderer/src/styles/theme.css` holds the
   Ruby palette (`--primary: #de0068`, `--background: #050304`, …). Use the semantic
@@ -172,9 +172,10 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 .\node_modules\electron\dist\electron.exe scripts/smoke-mcp.cjs
 .\node_modules\electron\dist\electron.exe scripts/smoke-browser.cjs
 .\node_modules\electron\dist\electron.exe scripts/smoke-markdown.cjs
+.\node_modules\electron\dist\electron.exe scripts/smoke-session-history.cjs
 ```
 
-All five must end with `RESULT PASS` and **exit code 0**. Run `npm run build` first.
+All six must end with `RESULT PASS` and **exit code 0**. Run `npm run build` first.
 
 **When you add an IPC channel, wire it in `scripts/smoke-harness.cjs` too.** The
 harness reimplements the main process's IPC wiring; a channel missing there means

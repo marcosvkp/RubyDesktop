@@ -3,12 +3,21 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0 ✅ · M1 ✅ · M2 ✅ · M3 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.3 ✅ · M5 ✅ — workflow DSL pendente**
+Status: **M0–M5 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6 pós-release ✅**
 Data: 2026-10-13
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
 
+**Atualização de implementação — 2026-10-13:** goal com continuação limitada, DSL de workflows,
+workspaces recentes, abas do browser e ajustes de UX/acessibilidade foram entregues. Build/typecheck
+do Desktop e os cinco smokes Electron passaram quando executados com acesso ampliado. RubyCLI
+build/typecheck/lint/format passaram; 1158 testes passaram e 70 foram ignorados. A matriz live falhou
+em 21 cenários porque a única chave OpenAI configurada foi rejeitada; o Node 24 no Windows também
+encerrou esses processos com uma assertion libuv (`3221226505`). Nenhum commit/push foi feito nesta
+rodada.
+
 **Estado verificado no fim do M2**
+
 - RubyCLI: suíte **1104 passando / 0 falhando** (baseline do Windows zerado), `typecheck`,
   `lint` e `format:check` limpos. Commits `47cc5e0` e `fd17d52` sobre os 3 do M0.
 - RubyDesktop: `typecheck:node` + `typecheck:web` limpos, build de engine/main/preload/renderer OK.
@@ -19,6 +28,7 @@ Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\Rub
     banner de goal renderiza; `/compact` completa.
 
 **Estado verificado no fim do M3 (MCP + painel de saída + browser)**
+
 - RubyCLI: suíte **1129 passando / 0 falhando**, `typecheck`/`lint`/`format:check` limpos.
   Commits `fa3dfec` (MCP para embedders) e `82770a2` (default model + `RUBYCLI_HOME`).
 - RubyDesktop: `typecheck` limpo, build OK. Commits `ec0e131` (MCP + output panel) e
@@ -37,7 +47,7 @@ Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\Rub
 
 **Não forkar um app de terceiros. Extrair o engine do `rubycli` e construir um shell Electron fino em cima.**
 
-Por quê: o `rubycli` já é um engine de agente completo (loop, providers, MCP, tools, subagentes, goal, compact, sessões, permissões). O que falta não é o *cérebro* — é uma **casca desktop** e **três capacidades novas** (browser controlável, orquestração real de subagentes, empacotamento). Construir isso em cima do engine é ordens de magnitude menos trabalho do que forkar opencode/goose/Jan e reimplementar provider + MCP + loop.
+Por quê: o `rubycli` já é um engine de agente completo (loop, providers, MCP, tools, subagentes, goal, compact, sessões, permissões). O que falta não é o _cérebro_ — é uma **casca desktop** e **três capacidades novas** (browser controlável, orquestração real de subagentes, empacotamento). Construir isso em cima do engine é ordens de magnitude menos trabalho do que forkar opencode/goose/Jan e reimplementar provider + MCP + loop.
 
 Consequência: o `rubycli` passa a publicar o engine como **biblioteca** (`@rubycli/core`) e o Desktop é um **repositório separado** que consome essa biblioteca. Um engine, duas interfaces (CLI + Desktop), dois repos.
 
@@ -51,24 +61,24 @@ Implicação prática: todo o trabalho de engine (extrair o core, injetar `Confi
 
 Li o repositório `github.com/marcosvkp/rubycli` (332 entradas, ~149 arquivos em `src/`, ~890 KB de TS fora de `eval/`). Já implementado:
 
-| Capacidade | Onde | Estado |
-|---|---|---|
-| Loop do agente (react, 50 turnos, abort por erro de ambiente) | `src/core/agent.ts` (21 KB) | ✅ pronto |
-| Stream de eventos (`AgentEvent`) | `src/core/agent.ts` | ✅ pronto |
-| Providers: OpenAI-compat, Anthropic, Gemini, Ollama | `src/providers/*` | ✅ pronto |
-| Registry de providers com `baseUrl` custom | `src/providers/registry.ts` | ✅ pronto |
-| Acumulação de `tool_calls` em streaming (por `index`) | `src/providers/openai.ts` | ✅ pronto |
-| Salvage de tool calls em texto (modelos OSS) | `src/providers/salvage.ts` | ✅ pronto |
-| **MCP** stdio + streamable HTTP | `src/mcp/*` | ✅ pronto |
-| Tools: read/write/edit/multiEdit/glob/grep/ls/bash/webFetch/todo/think | `src/tools/*` | ✅ pronto |
-| **Subagente** (`task`, read-only, 15 turnos) | `src/tools/task/subagent.ts` | ⚠️ parcial |
-| **Goal** persistente (`active`/`paused`/`complete` + notas) | `src/state/goal.ts` | ✅ pronto |
-| **Compact** + auto-compact em 75% do contexto | `src/core/compact.ts` | ✅ pronto |
-| Sessões + snapshots/rewind | `src/state/session.ts`, `snapshot.ts` | ✅ pronto |
-| Permissões por projeto | `src/state/project-permissions.ts` | ✅ pronto |
-| Skills (13 builtin, autocomplete e `/new-skill` no Desktop) | `src/skills/*` | ✅ pronto |
-| Sandbox de exec (macOS `sandbox-exec`, Linux `bwrap`, passthrough no Windows) | `src/tools/exec/sandbox/*` | ⚠️ no Windows é passthrough |
-| Slash commands `/goal /compact /plan /auto /rewind …` | `src/cli/repl.ts` + composer | ✅ parcial no Desktop; `/auto`, `/rewind` seguem só no terminal |
+| Capacidade                                                                    | Onde                                  | Estado                                                          |
+| ----------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------- |
+| Loop do agente (react, 50 turnos, abort por erro de ambiente)                 | `src/core/agent.ts` (21 KB)           | ✅ pronto                                                       |
+| Stream de eventos (`AgentEvent`)                                              | `src/core/agent.ts`                   | ✅ pronto                                                       |
+| Providers: OpenAI-compat, Anthropic, Gemini, Ollama                           | `src/providers/*`                     | ✅ pronto                                                       |
+| Registry de providers com `baseUrl` custom                                    | `src/providers/registry.ts`           | ✅ pronto                                                       |
+| Acumulação de `tool_calls` em streaming (por `index`)                         | `src/providers/openai.ts`             | ✅ pronto                                                       |
+| Salvage de tool calls em texto (modelos OSS)                                  | `src/providers/salvage.ts`            | ✅ pronto                                                       |
+| **MCP** stdio + streamable HTTP                                               | `src/mcp/*`                           | ✅ pronto                                                       |
+| Tools: read/write/edit/multiEdit/glob/grep/ls/bash/webFetch/todo/think        | `src/tools/*`                         | ✅ pronto                                                       |
+| **Subagente** (`task`, read-only, 15 turnos)                                  | `src/tools/task/subagent.ts`          | ⚠️ parcial                                                      |
+| **Goal** persistente (`active`/`paused`/`complete` + notas)                   | `src/state/goal.ts`                   | ✅ pronto                                                       |
+| **Compact** + auto-compact em 75% do contexto                                 | `src/core/compact.ts`                 | ✅ pronto                                                       |
+| Sessões + snapshots/rewind                                                    | `src/state/session.ts`, `snapshot.ts` | ✅ pronto                                                       |
+| Permissões por projeto                                                        | `src/state/project-permissions.ts`    | ✅ pronto                                                       |
+| Skills (13 builtin, autocomplete e `/new-skill` no Desktop)                   | `src/skills/*`                        | ✅ pronto                                                       |
+| Sandbox de exec (macOS `sandbox-exec`, Linux `bwrap`, passthrough no Windows) | `src/tools/exec/sandbox/*`            | ⚠️ no Windows é passthrough                                     |
+| Slash commands `/goal /compact /plan /auto /rewind …`                         | `src/cli/repl.ts` + composer          | ✅ parcial no Desktop; `/auto`, `/rewind` seguem só no terminal |
 
 **Conclusão: ~80% do que o app precisa já está escrito.** O trabalho é de integração e casca.
 
@@ -82,16 +92,16 @@ Rodei testes reais contra `https://app.rubycli.cloud/v1` usando a chave já conf
 
 O ponto que decidia o projeto inteiro. Confirmado ao vivo:
 
-| Teste | Modelos | Resultado |
-|---|---|---|
-| Tool call não-streaming | `ruby-smart`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `muse-spark-1.3-contributor` | `finish_reason=tool_calls`, `tool_calls` estruturado com args JSON corretos ✅ |
-| Deltas incrementais em streaming | `muse-spark-1.3-contributor` | `delta.tool_calls[].index=0` → `id`+`name` → fragmento `{"city":"Paris"}` ✅ |
-| `stream_options:{include_usage:true}` | idem | `usage` no chunk final (`prompt=732 completion=362 total=1094`) ✅ |
-| `tool_choice:"auto"` / `"required"` / `"none"` | `muse-spark` | Todos aceitos. `required` força a chamada; `none` suprime ✅ |
-| **Tool calls paralelos** | `ruby-smart` | 2 `tool_calls` numa resposta (`get_weather` + `get_time`) ✅ |
-| Round-trip multi-turno (`assistant.tool_calls` + `role:"tool"`) | `ruby-smart` | Formato aceito sem erro ✅ |
-| Anthropic `tool_use` em `/anthropic/v1/messages` | `ruby-smart` | `stop_reason=tool_use`, `input={"city":"Paris"}`, `usage in=722 out=189` ✅ |
-| `/v1/messages` (shape Anthropic) | `ruby-smart` | Também funciona ✅ |
+| Teste                                                           | Modelos                                                                                       | Resultado                                                                      |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Tool call não-streaming                                         | `ruby-smart`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `muse-spark-1.3-contributor` | `finish_reason=tool_calls`, `tool_calls` estruturado com args JSON corretos ✅ |
+| Deltas incrementais em streaming                                | `muse-spark-1.3-contributor`                                                                  | `delta.tool_calls[].index=0` → `id`+`name` → fragmento `{"city":"Paris"}` ✅   |
+| `stream_options:{include_usage:true}`                           | idem                                                                                          | `usage` no chunk final (`prompt=732 completion=362 total=1094`) ✅             |
+| `tool_choice:"auto"` / `"required"` / `"none"`                  | `muse-spark`                                                                                  | Todos aceitos. `required` força a chamada; `none` suprime ✅                   |
+| **Tool calls paralelos**                                        | `ruby-smart`                                                                                  | 2 `tool_calls` numa resposta (`get_weather` + `get_time`) ✅                   |
+| Round-trip multi-turno (`assistant.tool_calls` + `role:"tool"`) | `ruby-smart`                                                                                  | Formato aceito sem erro ✅                                                     |
+| Anthropic `tool_use` em `/anthropic/v1/messages`                | `ruby-smart`                                                                                  | `stop_reason=tool_use`, `input={"city":"Paris"}`, `usage in=722 out=189` ✅    |
+| `/v1/messages` (shape Anthropic)                                | `ruby-smart`                                                                                  | Também funciona ✅                                                             |
 
 Ou seja: **`tool_choice`, tool calls paralelos e o formato Anthropic funcionam** — três coisas que a documentação pública não cobre. Pode desenhar o loop com confiança total.
 
@@ -99,21 +109,21 @@ Ou seja: **`tool_choice`, tool calls paralelos e o formato Anthropic funcionam**
 
 `GET /v1/models` devolve, por modelo: `id, name, display_name, object, type, created, created_at, owned_by, context_window, max_output_tokens, supports_reasoning, supports_vision`.
 
-| id | contexto | reasoning | vision |
-|---|---|---|---|
-| `ruby-smart` | 512.000 | ❌ | ✅ |
-| `gpt-6-sol` | 1.000.000 | ✅ | ✅ |
-| `gpt-6.1-sol` | 1.000.000 | ✅ | ✅ |
-| `gpt-6-astra` | 1.000.000 | ✅ | ✅ |
-| `deepseek-v4.1-flash` | 1.000.000 | ✅ | ✅ |
-| `glm-5.3` | 1.000.000 | ✅ | ❌ |
-| `glm-5.3-flash` | 1.000.000 | ✅ | ✅ |
-| `gpt-6-luna` | 1.000.000 | ✅ | ✅ |
-| `muse-spark-1.3-contributor` | 1.000.000 | ❌ | ✅ |
-| `kimi-k3` | 1.000.000 | ✅ | ✅ |
-| `mimo-v2.6-flash` | 1.048.576 | ✅ | ✅ |
-| `mimo-v2.6-pro` | 1.048.576 | ✅ | ✅ |
-| `mimo-v2.6-pro-ultraspeed` | 1.048.576 | ✅ | ✅ |
+| id                           | contexto  | reasoning | vision |
+| ---------------------------- | --------- | --------- | ------ |
+| `ruby-smart`                 | 512.000   | ❌        | ✅     |
+| `gpt-6-sol`                  | 1.000.000 | ✅        | ✅     |
+| `gpt-6.1-sol`                | 1.000.000 | ✅        | ✅     |
+| `gpt-6-astra`                | 1.000.000 | ✅        | ✅     |
+| `deepseek-v4.1-flash`        | 1.000.000 | ✅        | ✅     |
+| `glm-5.3`                    | 1.000.000 | ✅        | ❌     |
+| `glm-5.3-flash`              | 1.000.000 | ✅        | ✅     |
+| `gpt-6-luna`                 | 1.000.000 | ✅        | ✅     |
+| `muse-spark-1.3-contributor` | 1.000.000 | ❌        | ✅     |
+| `kimi-k3`                    | 1.000.000 | ✅        | ✅     |
+| `mimo-v2.6-flash`            | 1.048.576 | ✅        | ✅     |
+| `mimo-v2.6-pro`              | 1.048.576 | ✅        | ✅     |
+| `mimo-v2.6-pro-ultraspeed`   | 1.048.576 | ✅        | ✅     |
 
 > **Correção de registro.** Numa versão anterior deste documento eu afirmei que o
 > catálogo devolvia um modelo com `id` vazio (`display_name` "the model 5.5").
@@ -125,12 +135,14 @@ Ou seja: **`tool_choice`, tool calls paralelos e o formato Anthropic funcionam**
 ### 3.3 Dois bugs encontrados 🔴
 
 **(1) `ruby-auto` não existe — o CLI está quebrado out-of-the-box.**
+
 ```
 POST /v1/chat/completions  {"model":"ruby-auto", ...}
 → 404 {"error":{"message":"O modelo 'ruby-auto' não existe. Consulte GET /v1/models.",
         "type":"not_found_error","param":"model","code":"model_not_found"}}
 ```
-Mas `DEFAULT_MODEL = "ruby-auto"` em `src/rubycli.ts:18` e o preset `rubycli` também. E o README diz *"The default model is `ruby-auto`"*. **Qualquer usuário que instale o CLI e rode `ruby` sem configurar modelo toma 404.** Correção aplicada: default = `ruby-smart` (existe no catálogo, carrega o prefixo `ruby-` e tem 512k de contexto).
+
+Mas `DEFAULT_MODEL = "ruby-auto"` em `src/rubycli.ts:18` e o preset `rubycli` também. E o README diz _"The default model is `ruby-auto`"_. **Qualquer usuário que instale o CLI e rode `ruby` sem configurar modelo toma 404.** Correção aplicada: default = `ruby-smart` (existe no catálogo, carrega o prefixo `ruby-` e tem 512k de contexto).
 
 **(2) `max_output_tokens` vem `null` para quase todos** (só `mimo-v2.6-*` têm `131072`). Sem isso não dá para saber o teto de saída por modelo — o app deve usar um default conservador e nunca confiar no campo. Correção aplicada: `remoteMaxOutputTokens()` devolve `undefined` em vez de `null`, para que nenhum chamador encaminhe um `max_tokens` nulo (que a API rejeita).
 
@@ -139,22 +151,24 @@ Mas `DEFAULT_MODEL = "ruby-auto"` em `src/rubycli.ts:18` e o preset `rubycli` ta
 Com o projeto em mãos, confirmei a origem dos bugs e achei mais dois.
 
 **(3) 🔴 `redactRubyKey` não redige as chaves reais — corrigido.** Em `src/rubycli.ts`:
+
 ```ts
-const RUBYCLI_KEY_RE = /\bruby_sk_[A-Za-z0-9_-]{8,}\b/g;   // espera ruby_sk_...
+const RUBYCLI_KEY_RE = /\bruby_sk_[A-Za-z0-9_-]{8,}\b/g; // espera ruby_sk_...
 ```
+
 Mas a chave real é `sk-ruby-...` (confirmado na chave ativa em `~/.rubycli/config.json`). O regex **nunca casa**. Consequência: uma chave nua em texto (mensagem de erro, conteúdo de sessão, log) **não é redigida** pela função cujo trabalho é exatamente esse. O `BEARER_RE` cobre `Bearer sk-...` e o `ASSIGN_RE` cobre `api_key=...`, mas o token solto passava. Correção aplicada: padrão `sk-ruby-` adicionado, com lookahead em vez de `\b` no fim (porque `-` é não-palavra, então `\b` recusaria uma chave terminada em hífen), mantendo o padrão antigo por compatibilidade.
 
 **(4) `API_KEY_ENV` divergente da documentação — corrigido.** `src/rubycli.ts` exportava `API_KEY_ENV = "RUBYCLI_API_KEY"`, enquanto o instalador e a documentação pública usam `RUBY_API_KEY`. Correção aplicada: `API_KEY_ENVS = ["RUBY_API_KEY", "RUBYCLI_API_KEY"]`, com `findApiKeyInEnv()` / `readApiKeyFromEnv()` usados pelo onboarding e pelo `/status`.
 
 **(5) 🔴 Roteamento de provider por prefixo quebra 8 dos 14 modelos — NÃO corrigido.** `detectProviderFromRegistry()` decide o provider por prefixo do nome do modelo, e vários presets de terceiros declaram prefixos que colidem com o catálogo da Ruby:
 
-| Modelo do catálogo Ruby | É roteado para | Deveria ir para |
-|---|---|---|
-| `glm-5.3`, `glm-5.3-flash` | `zai` (`ZAI_API_KEY`) | `rubycli` |
-| `deepseek-v4.1-flash` | `deepseek` | `rubycli` |
-| `kimi-k3` | `moonshot` | `rubycli` |
-| `claude-haiku-5.5` | `anthropic` | `rubycli` |
-| `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna` | `openai` | `rubycli` |
+| Modelo do catálogo Ruby                                 | É roteado para        | Deveria ir para |
+| ------------------------------------------------------- | --------------------- | --------------- |
+| `glm-5.3`, `glm-5.3-flash`                              | `zai` (`ZAI_API_KEY`) | `rubycli`       |
+| `deepseek-v4.1-flash`                                   | `deepseek`            | `rubycli`       |
+| `kimi-k3`                                               | `moonshot`            | `rubycli`       |
+| `claude-haiku-5.5`                                      | `anthropic`           | `rubycli`       |
+| `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna` | `openai`              | `rubycli`       |
 
 Só escapam `ruby-smart` (prefixo `ruby-`), `muse-spark-*` e `mimo-v2.6-*` (sem prefixo → caem no `DEFAULT_PROVIDER`, que é `rubycli`). Na prática, escolher qualquer um desses 8 modelos no app falha com "No ZAI API key found" ou bate no endpoint errado.
 
@@ -166,12 +180,12 @@ Verificado end-to-end com base URL inválida (sem gastar créditos): `glm-5.3`, 
 
 **(6) 🟡 `AGENTS.md` / `engineering-practices.md` desatualizados** — herdados do upstream sem renomear. Apontavam para caminhos e diretórios que não existem mais:
 
-| Documento dizia | Realidade |
-|---|---|
-| `src/agent/`, `src/model/` | `src/core/`, `src/providers/` |
-| `~/.opencli/config.json`, `~/.opencli/mcp.json` | `~/.rubycli/` |
-| `OPENCLI_SYSTEM_MD`, `OPENCLI_MAX_TOOL_OUTPUT` | `RUBYCLI_*` (com `OPENCLI_*` como fallback legado) |
-| projeto "OpenCLI" | "RubyCLI" (`PRODUCT_NAME` em `src/rubycli.ts`) |
+| Documento dizia                                 | Realidade                                          |
+| ----------------------------------------------- | -------------------------------------------------- |
+| `src/agent/`, `src/model/`                      | `src/core/`, `src/providers/`                      |
+| `~/.opencli/config.json`, `~/.opencli/mcp.json` | `~/.rubycli/`                                      |
+| `OPENCLI_SYSTEM_MD`, `OPENCLI_MAX_TOOL_OUTPUT`  | `RUBYCLI_*` (com `OPENCLI_*` como fallback legado) |
+| projeto "OpenCLI"                               | "RubyCLI" (`PRODUCT_NAME` em `src/rubycli.ts`)     |
 
 Isso importa porque **`AGENTS.md` é o arquivo que agentes de código leem** — inclusive eu, ao trabalhar no M0.
 
@@ -188,14 +202,14 @@ Rodei `npm run typecheck && npm test` no repo local:
 
 Depois das correções do M0.1: **13 falhas / 1040 passando** — mesmas 13 falhas, **+12 testes novos**, zero regressão.
 
-| Arquivo | Falhas |
-|---|---|
-| `src/tools/exec/bash.test.ts` | 4 |
-| `src/tools/exec/sandbox/passthrough.test.ts` | 3 |
-| `src/eval/sandbox/contract.test.ts` | 2 |
-| `src/cli/mentions.test.ts` | 1 |
-| `src/core/agent.e2e.test.ts` | 1 |
-| `src/tools/file/file.test.ts` | 1 |
+| Arquivo                                      | Falhas |
+| -------------------------------------------- | ------ |
+| `src/tools/exec/bash.test.ts`                | 4      |
+| `src/tools/exec/sandbox/passthrough.test.ts` | 3      |
+| `src/eval/sandbox/contract.test.ts`          | 2      |
+| `src/cli/mentions.test.ts`                   | 1      |
+| `src/core/agent.e2e.test.ts`                 | 1      |
+| `src/tools/file/file.test.ts`                | 1      |
 
 **ATUALIZAÇÃO (M2): baseline zerado — 1104 passando, 0 falhando.** As 13 falhas não
 eram "semântica de shell no Windows" a aceitar; eram **três bugs reais de Windows**
@@ -293,12 +307,13 @@ RubyDesktop/
 
 O ponto sensível do modelo de repo separado: iterar em engine + app ao mesmo tempo sem publicar a cada mudança.
 
-| Momento | Como o Desktop consome o core |
-|---|---|
+| Momento             | Como o Desktop consome o core                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | **Desenvolvimento** | `pnpm link` (ou dependência `link:`/`file:`) apontando para `G:\VSCodeProjects\RubyCLI` → hot reload atravessa os repos |
-| **CI / release** | versão publicada no npm (`@rubycli/core@x.y.z`) com `pnpm publish` |
+| **CI / release**    | versão publicada no npm (`@rubycli/core@x.y.z`) com `pnpm publish`                                                      |
 
 Regras:
+
 1. O repo já está local em **`G:\VSCodeProjects\RubyCLI`** (git limpo, `main`, `upstream` = `zjshen14/opencli`). Sem necessidade de clonar.
 2. `@rubycli/core` versiona semver independente do CLI; mudança de contrato de eventos = **major**.
 3. O contrato de eventos da §4.5 é a **API pública** entre os repos — versionar e documentar como tal.
@@ -352,18 +367,18 @@ Detalhamento completo, snippet de tema pronto e regras de acessibilidade: [`DESI
 
 ## 5. Como cada requisito essencial é atendido
 
-| # | Requisito | Como | Esforço |
-|---|---|---|---|
-| 1 | **Facilidade para MCPs** | Engine já tem stdio + streamable HTTP (`src/mcp/*`), config `~/.rubycli/mcp.json`, `${VAR}` expansion, timeout por servidor, nomes `mcp__<server>__<tool>`, gating HITL. Falta só **UI**: lista, adicionar/editar/remover, testar conexão, ver tools descobertas, aprovar por servidor | 🟢 Baixo |
-| 2 | **Windows / Linux / Mac** | Electron + TS é multiplataforma nativo. Windows e Linux você testa e empacota. **macOS não é empacotável a partir do Windows** — exige runner macOS (CI) e, para distribuir sem aviso, conta Apple Developer | 🟡 Médio |
-| 3 | **Executável Windows** | `electron-builder` 26 + target **NSIS** (x64 + arm64). `asarUnpack` para módulos nativos. Auto-update via `electron-updater` + GitHub Releases | 🟢 Baixo |
-| 4 | **Workspaces** | Workspace = pasta de projeto. `~/.rubycli/projects` + `project-permissions` já existem. Adicionar: switcher, sessões por workspace, persistência, restaurar último | 🟢 Baixo |
-| 5 | **Provider Ruby** | Já é o default do engine. Guardar chave em `safeStorage` (não em JSON plano). Buscar `/v1/models` por chave, **filtrar id vazio**, default = `ruby-smart` (nunca `ruby-auto`). Segundo backend Anthropic já validado | 🟢 Baixo |
-| 6 | **WebBrowser integrado** | `WebContentsView` (Electron 44; `BrowserView` está **deprecado**) + CDP via `webContents.debugger.attach('1.3')`. Tools novas: `browser_open/navigate/snapshot/click/type/scroll/screenshot`. Snapshot para o LLM via `Accessibility.getFullAXTree` | 🟡 Médio |
-| 7 | **Comando de goal** | `src/state/goal.ts` já tem `setGoal/noteGoal/setGoalStatus/clearGoal` + `/goal` e `/auto`. Adicionar: `maxRounds`, `round`, status `blocked`, UI (banner, notas, toggle auto-continuação) | 🟢 Baixo |
-| 8 | **Comando de compact** | `src/core/compact.ts` + auto-compact em 75% já prontos. Adicionar: `/compact` na UI, medidor de contexto ao vivo, preview do resumo, undo | 🟢 Baixo |
-| 9 | **Sub-agentes + orquestração** | Entregue: explorer read-only, workers em worktree, concorrência limitada, perguntas inline e revisão explícita de diff. Pendente: DSL `workflow` com `agent()`, `parallel()`, `pipeline()` e `phase()` | 🟡 Médio |
-| 10 | **Multi-provider** | Registry já suporta baseUrl custom. Expor na UI: Ruby (nativo), OpenAI-compat custom, Anthropic | 🟢 Baixo |
+| #   | Requisito                      | Como                                                                                                                                                                                                                                                                                   | Esforço           |
+| --- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| 1   | **Facilidade para MCPs**       | Engine já tem stdio + streamable HTTP (`src/mcp/*`), config `~/.rubycli/mcp.json`, `${VAR}` expansion, timeout por servidor, nomes `mcp__<server>__<tool>`, gating HITL. Falta só **UI**: lista, adicionar/editar/remover, testar conexão, ver tools descobertas, aprovar por servidor | 🟢 Baixo          |
+| 2   | **Windows / Linux / Mac**      | Electron + TS é multiplataforma nativo. Windows e Linux você testa e empacota. **macOS não é empacotável a partir do Windows** — exige runner macOS (CI) e, para distribuir sem aviso, conta Apple Developer                                                                           | 🟡 Médio          |
+| 3   | **Executável Windows**         | `electron-builder` 26 + target **NSIS** (x64 + arm64). `asarUnpack` para módulos nativos. Auto-update via `electron-updater` + GitHub Releases                                                                                                                                         | 🟢 Baixo          |
+| 4   | **Workspaces**                 | Workspace = pasta de projeto. `~/.rubycli/projects` + `project-permissions` já existem. Adicionar: switcher, sessões por workspace, persistência, restaurar último                                                                                                                     | 🟢 Baixo          |
+| 5   | **Provider Ruby**              | Já é o default do engine. Guardar chave em `safeStorage` (não em JSON plano). Buscar `/v1/models` por chave, **filtrar id vazio**, default = `ruby-smart` (nunca `ruby-auto`). Segundo backend Anthropic já validado                                                                   | 🟢 Baixo          |
+| 6   | **WebBrowser integrado**       | `WebContentsView` (Electron 44; `BrowserView` está **deprecado**) + CDP via `webContents.debugger.attach('1.3')`. Tools novas: `browser_open/navigate/snapshot/click/type/scroll/screenshot`. Snapshot para o LLM via `Accessibility.getFullAXTree`                                    | 🟡 Médio          |
+| 7   | **Comando de goal**            | `runAutoGoal` implementa limite, progresso, conclusão, pausa e bloqueio; Desktop tem controles no banner e slash commands                                                                                                                                                              | ✅ Entregue em M6 |
+| 8   | **Comando de compact**         | `src/core/compact.ts` + auto-compact em 75% já prontos. Adicionar: `/compact` na UI, medidor de contexto ao vivo, preview do resumo, undo                                                                                                                                              | 🟢 Baixo          |
+| 9   | **Sub-agentes + orquestração** | Explorers/workers, configuração e revisão no chat, perguntas inline e DSL `workflow` com grupos e JSON Schema                                                                                                                                                                          | ✅ M4.1–M4.4      |
+| 10  | **Multi-provider**             | Registry já suporta baseUrl custom. Expor na UI: Ruby (nativo), OpenAI-compat custom, Anthropic                                                                                                                                                                                        | 🟢 Baixo          |
 
 ---
 
@@ -376,6 +391,7 @@ Duas trilhas em paralelo: **Core** (repo `rubycli`) e **Desktop** (repo `RubyDes
 **Trilha Core (`G:\VSCodeProjects\RubyCLI`)** — `main`, working tree limpo
 
 **M0.1 — correções ✅** (`c80ea19`)
+
 - ✅ Bug #1: `DEFAULT_MODEL` → `ruby-smart` (era `ruby-auto`, que dá 404). O cliente de compactação tinha o mesmo id inválido.
 - ✅ Bug #2 (segurança): `redactRubyKey` agora redige `sk-ruby-...` (antes só casava o formato antigo `ruby_sk_`, então chave real passava crua).
 - ✅ Bug #3: `remoteMaxOutputTokens()` trata `max_output_tokens: null` sem vazar `null`.
@@ -385,6 +401,7 @@ Duas trilhas em paralelo: **Core** (repo `rubycli`) e **Desktop** (repo `RubyDes
 - ✅ +44 testes. `typecheck`/`lint`/`format:check` limpos.
 
 **M0.2 — biblioteca ✅** (`3538cbd`)
+
 - ✅ `src/lib.ts`: superfície pública documentada do engine (agent, providers, tools, MCP, skills, state, goal, snapshot).
 - ✅ `exports` map + `main`/`types` no `package.json`.
 - ✅ Declarações via `tsc --emitDeclarationOnly` (o `dts` do tsup falha no TS 6 com TS5101 `baseUrl`).
@@ -392,15 +409,18 @@ Duas trilhas em paralelo: **Core** (repo `rubycli`) e **Desktop** (repo `RubyDes
 - ✅ **Verificado importando o `dist/lib.js` real**: 13 tools, 13 skills, turno completo com streaming, `contextWindow=512000` (o real do modelo, não o default de 100k).
 
 **M0.3 — docs ✅** (`528b23d`)
+
 - ✅ `AGENTS.md`, `CLAUDE.md`, `docs/engineering-practices.md` corrigidos: apontavam para `~/.opencli`, `OPENCLI_*`, `src/agent/`+`src/model/` e default Gemini.
 - ✅ `AGENTS.md` e `CLAUDE.md` em sincronia (corpo idêntico, 180 linhas cada).
 
 **Achados registrados para o M1**
+
 - ⚠️ **`options.model` é obrigatório ao construir o `Agent`.** A janela de contexto é resolvida pelo nome do modelo, e o client não expõe o dele. Omitir cai silenciosamente no default de 100k, e o auto-compact dispararia em 75k em vez de 75% da janela real.
 - ⚠️ **Split `packages/core` + `packages/cli` é desnecessário.** Confirmado que a camada já está limpa (nada fora de `cli/` importa clack; `core/` só toca `state/` via `import type`). Basta o barrel + `exports` — que é o que foi feito. Publicar como `@rubyclii/cli` mesmo.
 - ℹ️ **Contaminação pré-existente:** `[OI]`/`[CC]` aparecem literalmente em comentários de `providers/openai.ts`, `factory.ts`, `core/agent.ts`, `core/executor.ts` e `cli/status-footer.ts` (herdado do upstream). Não é meu e não quebra nada, mas vale limpar algum dia.
 
 **Trilha Desktop (`RubyDesktop`)** — próximo
+
 - Scaffold: Electron 44 + electron-vite + React 19 + TypeScript + zustand 5.
 - **UI base: Tailwind CSS v4 + shadcn/ui**, com o tema do [`DESIGN.md`](DESIGN.md) (tokens idênticos ao site) e as fontes **Geist** / **Geist Mono** empacotadas.
 - Linkar o `RubyCLI` local; provar `import { Agent } from "@rubyclii/cli"`.
@@ -412,6 +432,7 @@ Duas trilhas em paralelo: **Core** (repo `rubycli`) e **Desktop** (repo `RubyDes
 **Core:** enriquecer `AgentEvent` com os tipos novos da §4.5 (usage, approval, turn, subagent, mcp_status); bump major.
 
 **Desktop**
+
 - Engine em `utilityProcess.fork()`; IPC tipado com o contrato da §4.5.
 - UI seguindo [`DESIGN.md`](DESIGN.md): sidebar de workspaces com os tokens `--sidebar-*`, chat com streaming token-a-token, tool calls colapsáveis (card com header mono + ícone em quadrado rosa), markdown em `react-markdown` e realce lexical leve de código (implementado na M3.5).
 - Seletor de modelo: pill toggle no estilo do site, lendo `/v1/models` (filtrando `id` vazio); chave em `safeStorage`.
@@ -425,6 +446,7 @@ no terminal (`src/cli/confirm.ts`) e publicá-la no `src/lib.ts`; a política pu
 `buildPermissionSources`, `grantKeysFor`) é o que o Desktop usa.
 
 **Desktop** — ✅ CONCLUÍDO
+
 - Workspace switcher: trocar de workspace **reinicia o engine com o novo `cwd`**, que é
   o que isola sessão, grants, goal e contenção de path. Sem estado compartilhado para
   vazar, porque o processo que o guarda é substituído.
@@ -435,7 +457,7 @@ no terminal (`src/cli/confirm.ts`) e publicá-la no `src/lib.ts`; a política pu
 - Goal: banner persistente ([`GoalBanner.tsx`](src/renderer/src/components/GoalBanner.tsx)),
   notas, `/goal`, pause/resume/complete/clear. Estado por workspace em `~/.rubycli/goals/`.
 - Compact: `/compact`, botão na status bar, medidor de contexto ao vivo, auto em 75%.
-- Modo de permissão na status bar (`Ask` / `Accept edits` / `Plan`) — é um *modo*, então
+- Modo de permissão na status bar (`Ask` / `Accept edits` / `Plan`) — é um _modo_, então
   fica sempre visível em vez de escondido num diálogo.
 - **Entregável:** ✅ fluxo agêntico completo com HITL, verificado ponta-a-ponta.
 
@@ -449,6 +471,7 @@ como falha de tool, não como decisão. Era um bug de segurança nas duas direç
 **Desktop** — ✅ **CONCLUÍDO** (MCP, painel de saída e browser).
 
 **MCP** ✅
+
 - Painel ([`McpPanel.tsx`](src/renderer/src/components/McpPanel.tsx)): lista cada servidor
   configurado com se está utilizável, as tools que expõe sob o nome real
   `mcp__<servidor>__<tool>`, ou o erro que o impediu. Um servidor que não sobe é
@@ -463,6 +486,7 @@ como falha de tool, não como decisão. Era um bug de segurança nas duas direç
   outros servidores junto).
 
 **Terminal = painel de saída do agente** ✅ (decisão tomada, sem `node-pty`)
+
 - [`OutputPanel.tsx`](src/renderer/src/components/OutputPanel.tsx) transmite os eventos de
   observabilidade do engine: tokens, latência e TTFT por chamada de modelo; duração e
   tamanho de saída por tool call; negações, guards e compactação. É por isso que ele lê
@@ -470,6 +494,7 @@ como falha de tool, não como decisão. Era um bug de segurança nas duas direç
   nada a dizer. Segue o fim só enquanto o usuário não rolou para cima; limitado a 300 linhas.
 
 **Browser** ✅
+
 - `WebContentsView` (Electron 44; `BrowserView` está deprecado) + CDP via
   `webContents.debugger.attach('1.3')`. Tools `browser_open/navigate/snapshot/click/type/scroll/back/screenshot/close`
   registradas no `ToolRegistry` e executadas por RPC de volta ao main
@@ -489,6 +514,7 @@ clique foi um evento confiável de verdade. Cobre também navegação, back, scr
 rejeição de ref obsoleto.
 
 **Três armadilhas encontradas (todas falhas silenciosas):**
+
 1. Eventos de mouse via CDP exigem o bitmask `buttons`, não só `button` — sem ele o comando
    reporta sucesso e nenhum `click` chega à página.
 2. O Chromium **descarta input sintético de uma view sem foco**, também reportando sucesso.
@@ -520,6 +546,7 @@ apareceu porque o teste MCP roda com `RUBYCLI_HOME` isolado. Corrigido para `DEF
 ### M3.5 — Continuidade e polimento da UX ✅
 
 **Implementado neste checkout; build e cinco smoke tests aprovados.**
+
 - Conversas persistidas por workspace, restauração da sessão mais recente, lista de recentes,
   nova conversa e retomada pela sidebar.
 - Scroll do chat só acompanha tokens enquanto o usuário está perto do fim; ao ler mensagens
@@ -532,8 +559,8 @@ apareceu porque o teste MCP roda com `RUBYCLI_HOME` isolado. Corrigido para `DEF
   worktrees permanecem no M4.
 - Sidebar reorganizada, diagnósticos recolhidos e rótulos principais em português.
 
-**Limites conhecidos:** o realce lexical não substitui um parser completo; workspaces recentes,
-múltiplas abas do browser e auto-continuação de goals seguem pendentes.
+**Limites conhecidos naquele marco:** o realce lexical não substitui um parser completo. Workspaces
+recentes, múltiplas abas e auto-continuação foram concluídos na etapa M6 abaixo.
 
 ### M3.6 — Estatísticas do chat e seletor de modelo ✅
 
@@ -553,6 +580,7 @@ múltiplas abas do browser e auto-continuação de goals seguem pendentes.
 #### M4.1 — Configuração e perguntas no chat ✅
 
 **Core (RubyCLI)**
+
 - Expor o catálogo de modelos e os reasoning efforts compatíveis para que cada subagente receba
   uma configuração explícita. Se modelo/effort não estiver disponível, explicar e propor uma
   alternativa; nunca trocar silenciosamente.
@@ -568,6 +596,7 @@ múltiplas abas do browser e auto-continuação de goals seguem pendentes.
   worker correto.
 
 **Desktop**
+
 - Perguntar inline se a IA deve configurar e iniciar o subagente ou se o usuário quer editar modelo,
   effort e orientações; mostrar a proposta antes da escolha e manter alternativas explícitas.
 - Mostrar a pergunta como cartão inline no chat, com opções selecionáveis e campo de resposta
@@ -578,6 +607,7 @@ múltiplas abas do browser e auto-continuação de goals seguem pendentes.
 #### M4.2 — Workers isolados ✅
 
 **Core (RubyCLI)**
+
 - Cada `worker` recebe branch e git worktree próprios, criados de um snapshot do estado de trabalho atual sem alterar o índice do usuário. O diff inclui arquivos novos e só é aplicado após aprovação explícita.
 - Papéis implementados: `explorer` (read-only) e `worker` (edição no worktree). Ferramentas de arquivo bloqueiam caminhos fora da raiz isolada; a aprovação existente continua ativa.
 - Concorrência limitada a três workers. Cancelamento e falha descartam worktree/branch; conflitos preservam o diff para nova revisão.
@@ -585,18 +615,29 @@ múltiplas abas do browser e auto-continuação de goals seguem pendentes.
 #### M4.3 — Acompanhamento e revisão no Desktop ✅
 
 **Desktop**
+
 - UI: árvore de subagentes com progresso, status, custo/tokens por agente; diff do worktree antes do merge.
 - Em cada agente, mostrar modelo, effort, papel e instruções; manter as perguntas e respostas no
   histórico visível do chat, identificando qual agente perguntou e recebeu cada resposta.
 - **Entregável:** orquestração multi-agente real.
 
-**Pendente do M4:** DSL `workflow` para definir `agent()`, `parallel()`, `pipeline()`, `phase()`,
-`log()` e validação de resultado por schema. Foi separada do fluxo básico de subagentes para uma
-etapa posterior.
+#### M4.4 — DSL de workflows ✅
+
+**RubyCLI**
+
+- Tool `workflow` com `agent()`, `parallel()`, `pipeline()`, `phase()` e `log()` usando um parser
+  restrito que não avalia JavaScript arbitrário.
+- Paralelismo tem limite e snapshot consistente de resultados anteriores; saída estruturada pode ser
+  validada por JSON Schema.
+- Hosts fornecem o executor de explorer, confirmação explícita para workers e execução isolada em
+  worktree. O Desktop conecta os callbacks ao mesmo seletor de modelo, perguntas e revisão do tool
+  `task`.
+- Validação direcionada: 15 testes de workflow passaram.
 
 ### M5 — Empacotamento + release
 
 **Desktop**
+
 - `electron-builder` 26: NSIS x64 + arm64 e instalador combinado com seleção de arquitetura. O
   engine ESM é copiado para `resources/engine` fora do ASAR, pois `utilityProcess` precisa abrir
   um caminho de arquivo real. `electron-updater` permanece dependência de runtime dentro do ASAR.
@@ -608,8 +649,7 @@ etapa posterior.
   automaticamente. A publicação final é uma ação manual após revisão.
 - O build Windows local gerou os instaladores x64, arm64 e combinado. Linux/macOS dependem dos
   runners próprios e não foram executados neste host.
-- **Entregável:** `.exe` instalável e pipeline multiplataforma de draft/update configurados; primeira
-  release ainda não publicada.
+- **Entregável:** `.exe` instalável, pipeline multiplataforma e release `v0.1.0` publicada.
 
 #### Uso operacional
 
@@ -628,29 +668,55 @@ Segredos opcionais: `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` para assinar Windows
 notarizar macOS. Sem assinatura, os pacotes ainda são produzidos, mas Windows/macOS não recebem
 metadados de auto-update. Para empacotar localmente, não é necessário configurar segredos.
 
-**Verificação M5 neste host:** `npm run dist` passou no Windows e gerou os instaladores NSIS.
-O engine existe em `resources/engine/index.mjs`, e `electron-updater`/suas dependências estão no
-ASAR. `npm run build` e typecheck passaram. Linux/macOS aguardam CI. O Electron deste ambiente
-encerra com `STATUS_BREAKPOINT` antes dos smoke tests; portanto, o runtime do pacote ainda precisa
-ser aberto em ambiente compatível antes de uma release pública.
+**Verificação M5:** `npm run dist` passou no Windows e gerou os instaladores NSIS; a release `v0.1.0`
+foi publicada para Windows, Linux e macOS. O engine existe em `resources/engine/index.mjs`, e
+`electron-updater`/suas dependências estão no ASAR. Os smokes do checkout passaram no Windows na
+etapa M6; a execução dos instaladores empacotados e o runtime interativo macOS/Linux continuam
+pendentes em seus sistemas próprios.
+
+### M6 — Continuação de goals e polimento pós-release ✅
+
+**RubyCLI**
+
+- Goals persistem `maxRounds`, rodadas concluídas e `blockedReason`; goals antigos são migrados com
+  limite padrão. `runAutoGoal()` é host-neutral, executa uma rodada por vez, pausa em cancelamento,
+  conclui por `GOAL_DONE` e bloqueia após limite ou falha até a retomada explícita.
+- REPL oferece `/goal auto`, `/goal stop` e `/goal max-rounds <1-100>`. Cobertura inclui 11 testes
+  de estado/continuação. `vitest.config.ts` agora exclui paths existentes (`src/providers/types.ts`
+  e `src/core/agent.ts`).
+- O runner de avaliação registra stderr/sinal/erro de spawn e falha cenários quando o subprocesso
+  retorna código não zero. A matriz desta máquina não foi aprovada: o único provider configurado
+  rejeitou a credencial OpenAI, seguido de assertion de libuv no Node 24/Windows (`3221226505`).
+
+**RubyDesktop**
+
+- Banner de goal permite configurar limite, iniciar ou parar a continuação; o estado `blocked`, motivo
+  e contagem ficam visíveis. O smoke de permissões valida uma execução pela UI até estado `complete`
+  ou `blocked`, e confirma retorno ao estado ready.
+- Persistência local dos oito workspaces mais recentes, troca validada, abas sandboxed do browser com
+  seleção/fechamento e refs CDP renovadas. Sidebar/painéis ficam responsivos abaixo de 1000px; abas
+  aceitam navegação por setas e controles têm labels/foco visível.
+- Verificação: `npm run build` passou; os cinco smoke scripts Electron passaram com exit 0 quando
+  executados com acesso ampliado. O build e o Electron no sandbox restrito falham em caminhos de
+  acesso/cache, então essa diferença de ambiente permanece documentada.
 
 ---
 
 ## 7. Riscos e mitigações
 
-| Risco | Impacto | Mitigação |
-|---|---|---|
-| `ruby-auto` inválido → 404 no primeiro uso | 🔴 Alto | M0 corrige o default; app nunca hardcoda modelo; default = 1º do catálogo |
-| Modelo do catálogo com `id` vazio → 400 | 🟡 Médio | Filtrar `id` vazio em toda leitura do catálogo + corrigir backend |
-| Tool calling falhar em algum modelo do catálogo | 🟡 Médio | **Já validado em 5 modelos.** Guarda: probe de capacidade por modelo + `salvage.ts` já pronto no engine |
-| `max_output_tokens` quase sempre `null` | 🟡 Médio | Default conservador por modelo; nunca confiar no campo |
-| macOS não empacotável do Windows | 🟡 Médio | CI com runner macOS; ou lançar Windows+Linux e adicionar mac depois |
-| Módulos nativos (`node-pty`, `better-sqlite3`) | 🟢 Baixo | **Risco eliminado no v1**: decisão de usar painel de saída (sem PTY) e sessões em JSON (sem SQLite). Nenhum módulo nativo previsto |
-| Sandbox de exec é passthrough no Windows | 🟡 Médio | Documentar como limitação conhecida; usar permissões HITL + snapshots/rewind como rede de segurança |
-| `utilityProcess` + MCP stdio (`process.execPath` vira o app empacotado) | 🟡 Médio | `ELECTRON_RUN_AS_NODE=1` ou empacotar um binário Node real |
-| Engine muito acoplado ao terminal | 🟡 Médio | M0 resolve: `ConfirmFn` já é o seam; mover clack para o CLI |
-| **Dois repos: sincronizar mudanças de contrato** | 🟡 Médio | `pnpm link` no desenvolvimento, semver no release, e o contrato de eventos da §4.5 tratado como API pública (major em breaking change) |
-| Escopo inflar ("não muito complexo") | 🟡 Médio | Reuso do engine é o que mantém simples; browser e orquestração são os únicos blocos novos de verdade |
+| Risco                                                                   | Impacto  | Mitigação                                                                                                                              |
+| ----------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ruby-auto` inválido → 404 no primeiro uso                              | 🔴 Alto  | M0 corrige o default; app nunca hardcoda modelo; default = 1º do catálogo                                                              |
+| Modelo do catálogo com `id` vazio → 400                                 | 🟡 Médio | Filtrar `id` vazio em toda leitura do catálogo + corrigir backend                                                                      |
+| Tool calling falhar em algum modelo do catálogo                         | 🟡 Médio | **Já validado em 5 modelos.** Guarda: probe de capacidade por modelo + `salvage.ts` já pronto no engine                                |
+| `max_output_tokens` quase sempre `null`                                 | 🟡 Médio | Default conservador por modelo; nunca confiar no campo                                                                                 |
+| macOS não empacotável do Windows                                        | 🟡 Médio | CI com runner macOS; ou lançar Windows+Linux e adicionar mac depois                                                                    |
+| Módulos nativos (`node-pty`, `better-sqlite3`)                          | 🟢 Baixo | **Risco eliminado no v1**: decisão de usar painel de saída (sem PTY) e sessões em JSON (sem SQLite). Nenhum módulo nativo previsto     |
+| Sandbox de exec é passthrough no Windows                                | 🟡 Médio | Documentar como limitação conhecida; usar permissões HITL + snapshots/rewind como rede de segurança                                    |
+| `utilityProcess` + MCP stdio (`process.execPath` vira o app empacotado) | 🟡 Médio | `ELECTRON_RUN_AS_NODE=1` ou empacotar um binário Node real                                                                             |
+| Engine muito acoplado ao terminal                                       | 🟡 Médio | M0 resolve: `ConfirmFn` já é o seam; mover clack para o CLI                                                                            |
+| **Dois repos: sincronizar mudanças de contrato**                        | 🟡 Médio | `pnpm link` no desenvolvimento, semver no release, e o contrato de eventos da §4.5 tratado como API pública (major em breaking change) |
+| Escopo inflar ("não muito complexo")                                    | 🟡 Médio | Reuso do engine é o que mantém simples; browser e orquestração são os únicos blocos novos de verdade                                   |
 
 ---
 
@@ -658,55 +724,53 @@ ser aberto em ambiente compatível antes de uma release pública.
 
 ### Resolvidas
 
-| # | Decisão | Escolha |
-|---|---|---|
-| 1 | Onde vive o Desktop | **Repo separado** consumindo `@rubycli/core` publicado |
-| 2 | Subagentes com escrita | **Git worktree isolado por subagente** |
-| 3 | Terminal integrado | **Painel de saída do agente** no v1 (zero nativos); PTY real depois, se necessário |
-| 4 | Nome do app | **Ruby Desktop** |
-| 8 | Modelo e effort de subagentes (M4) | **Selecionáveis a partir do catálogo; o orquestrador pode recomendar e justificar, e o usuário pode definir ou ajustar os valores por agente.** |
-| 9 | Orientação dos subagentes (M4) | **Cada agente pode receber instruções próprias de papel, contexto, limites, ferramentas e formato de saída.** |
-| 10 | Perguntas de esclarecimento (M4.1) | **Cartões interativos inline no chat, com opções e resposta livre; a resposta retoma o turno que aguarda.** |
-| 11 | Revisão e merge dos workers | **Mostrar diff, validar com `git apply --check` e só aplicar após ação explícita; conflito conserva o worktree para revisão.** |
-| 12 | Concorrência de subagentes | **Limite de três agentes em execução simultânea.** |
-| 13 | Distribuição M5 | **Draft multiplataforma via GitHub Actions; revisão e publicação manuais. Auto-update exige feed e assinatura Windows/macOS.** |
+| #   | Decisão                            | Escolha                                                                                                                                         |
+| --- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Onde vive o Desktop                | **Repo separado** consumindo `@rubycli/core` publicado                                                                                          |
+| 2   | Subagentes com escrita             | **Git worktree isolado por subagente**                                                                                                          |
+| 3   | Terminal integrado                 | **Painel de saída do agente** no v1 (zero nativos); PTY real depois, se necessário                                                              |
+| 4   | Nome do app                        | **Ruby Desktop**                                                                                                                                |
+| 8   | Modelo e effort de subagentes (M4) | **Selecionáveis a partir do catálogo; o orquestrador pode recomendar e justificar, e o usuário pode definir ou ajustar os valores por agente.** |
+| 9   | Orientação dos subagentes (M4)     | **Cada agente pode receber instruções próprias de papel, contexto, limites, ferramentas e formato de saída.**                                   |
+| 10  | Perguntas de esclarecimento (M4.1) | **Cartões interativos inline no chat, com opções e resposta livre; a resposta retoma o turno que aguarda.**                                     |
+| 11  | Revisão e merge dos workers        | **Mostrar diff, validar com `git apply --check` e só aplicar após ação explícita; conflito conserva o worktree para revisão.**                  |
+| 12  | Concorrência de subagentes         | **Limite de três agentes em execução simultânea.**                                                                                              |
+| 13  | Distribuição M5                    | **Draft multiplataforma via GitHub Actions; revisão e publicação manuais. Auto-update exige feed e assinatura Windows/macOS.**                  |
 
 ### Ainda abertas
 
 5. **Code signing:** instalar segredos de certificado Windows/macOS antes de distribuir amplamente; sem eles o build instala, mas pode exibir alertas e não atualiza automaticamente nessas plataformas.
 6. **Ref do engine na CI:** o padrão é `marcosvkp/rubycli@main`; definir `RUBYCLI_REF` para revisão compatível com a release, especialmente enquanto mudanças do engine ainda não estiverem publicadas.
-7. **DSL de workflow:** definir limites, permissões e schema de saída antes de permitir scripts que orquestrem vários agentes.
 
 ---
 
 ## 9. Comparação com o DeepSeek Harness
 
-| Capacidade do DSH | Nosso caminho |
-|---|---|
-| Workspaces isolados | ✅ M2 |
-| Goal manual | ✅ já no engine, UI em M2; auto-continuação segue pendente |
-| Compact de contexto | ✅ já no engine, UI em M2 |
-| MCP (stdio + HTTP) | ✅ já no engine, UI em M3 |
-| Subagentes com workers e revisão | ✅ M4.1–M4.3 |
-| DSL de workflows | ⚠️ pendente |
-| Browser integrado controlado pelo agente | ⚠️ M3 (novo) |
-| Skills | ✅ já no engine (13 builtin) |
-| Terminal integrado | ✅ M3 |
-| Permissões com aprovação | ✅ engine tem, UI em M2 |
-| Empacotamento Windows | ✅ M5: instaladores x64/arm64/combinado buildados; assinatura e primeira publicação pendentes |
-| Provider plugável | ✅ já no engine + Ruby nativo |
+| Capacidade do DSH                        | Nosso caminho                                                                                |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Workspaces isolados                      | ✅ M2                                                                                        |
+| Goal automático                          | ✅ engine host-neutral com limite, pausa, conclusão e estado bloqueado; controles no Desktop |
+| Compact de contexto                      | ✅ já no engine, UI em M2                                                                    |
+| MCP (stdio + HTTP)                       | ✅ já no engine, UI em M3                                                                    |
+| Subagentes com workers e revisão         | ✅ M4.1–M4.3                                                                                 |
+| DSL de workflows                         | ✅ M4.4 com parser restrito, paralelismo e JSON Schema                                       |
+| Browser integrado controlado pelo agente | ✅ M3; múltiplas abas em M6                                                                  |
+| Skills                                   | ✅ já no engine (13 builtin)                                                                 |
+| Terminal integrado                       | ✅ M3                                                                                        |
+| Permissões com aprovação                 | ✅ engine tem, UI em M2                                                                      |
+| Empacotamento Windows                    | ✅ M5: instaladores x64/arm64/combinado; `v0.1.0` publicada; assinatura opcional             |
+| Provider plugável                        | ✅ já no engine + Ruby nativo                                                                |
 
 ---
 
 ## 10. Próximo passo
 
-M0–M5 já foram entregues no checkout. O próximo passo operacional é configurar as refs/segredos de
-release, verificar os instaladores Linux/macOS na CI, revisar o draft e publicar manualmente.
-Auto-continuação de goals, workspaces recentes e múltiplas abas do browser ficam como melhorias
-posteriores.
+M0–M6 foram entregues no checkout. Próximos passos operacionais: usar uma chave OpenAI válida para
+repetir a matriz live e validar os instaladores empacotados em Windows, macOS e Linux. A release
+`v0.1.0` já está publicada; esta rodada de alterações ainda não foi commitada ou enviada.
 
-O workflow DSL fica como uma etapa separada do M4. Na verificação disponível, RubyCLI
-typecheck/lint/format passaram; 1133 testes passaram com a matriz live excluída; a matriz live teve
-21 falhas nas chamadas externas. `npm run build` e `npm run dist` do Desktop passaram no Windows,
-mas o Electron caiu com `STATUS_BREAKPOINT` antes dos smoke tests. O workflow de release não foi
-executado e nenhuma release foi publicada.
+Validação desta rodada: RubyCLI build/typecheck/lint/format passaram; 1158 testes passaram e 70
+foram ignorados. Os 21 casos live falharam porque a credencial OpenAI local foi rejeitada e o
+subprocesso Node 24 no Windows encerrou com assertion libuv (`3221226505`). Desktop build/typecheck
+e os cinco smoke scripts passaram com exit code 0 quando executados com acesso ampliado. No sandbox
+restrito, o Electron encerra com `STATUS_BREAKPOINT` e Vite encontra `EPERM` ao resolver arquivos.

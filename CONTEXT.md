@@ -3,16 +3,28 @@
 > Documento de passagem. Responde a uma pergunta só: **o que ainda não está feito, e o que
 > quem continuar precisa saber para não repetir trabalho nem tropeçar nos mesmos erros.**
 >
-> Para o *porquê* das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
+> Para o _porquê_ das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
-**Estado:** M0–M5 implementados neste checkout; a release `v0.1.0` foi publicada com artefatos
-Windows, macOS e Linux. O Desktop está em `51765aa`; a engine RubyCLI foi enviada ao repositório
-próprio em `5d6b987`, e o workflow de release a compila diretamente do GitHub (sem depender da
-publicação no npm). RubyCLI: **1133 testes determinísticos passaram e 71 foram ignorados**; a matriz
-live teve 21 falhas de subprocesso no Windows (`3221226505`). O build multiplataforma da release
-passou. O Electron local encerra com `STATUS_BREAKPOINT` antes de iniciar o smoke harness, então o
-runtime empacotado ainda precisa de validação nesta máquina.
+**Estado:** M0–M5 implementados e a release `v0.1.0` publicada com artefatos Windows, macOS e Linux.
+Esta rodada pós-release entrega continuação automática de goals, DSL de workflows, workspaces
+recentes, abas do browser e ajustes de acessibilidade/responsividade. O workflow de release compila
+a engine do repositório próprio no GitHub, sem depender da publicação no npm.
+
+### Verificação atual — 2026-10-13
+
+- RubyCLI: build, typecheck, ESLint e Prettier passaram. O teste de sessões teve **43 aprovados e 1
+  ignorado**. No Vitest completo, **1159 passaram e 70 foram ignorados**; os 21 casos restantes da
+  matriz live receberam `Invalid OpenAI API key` e acionaram a assertion de libuv no Node 24/Windows
+  (`3221226505`).
+- RubyDesktop: typecheck e build passaram. Os seis smokes Electron terminaram com `RESULT PASS`,
+  incluindo o novo replay de histórico com cartões de sub-agent e botões Sim/Não restaurados, além
+  de navegação/clique real, abas, permissões, MCP, markdown e auto-goal pela UI. No sandbox restrito,
+  o Electron/build encontra bloqueios de acesso; a execução com acesso ampliado concluiu os smokes
+  com exit code 0.
+- Os paths de `coverage.exclude` do Vitest foram atualizados para os diretórios atuais do RubyCLI.
+- Nenhum commit ou push foi feito nesta rodada. A validação interativa dos instaladores macOS/Linux
+  ainda depende de seus ambientes próprios.
 
 ### Etapa entregue — M3.5 UX
 
@@ -53,7 +65,7 @@ runtime empacotado ainda precisa de validação nesta máquina.
   isolado após uma primeira execução no workspace compartilhado responder sem chamar ferramenta.
 - Uma checagem no renderer buildado confirmou sugestões para `/new-skill` e `/goal`.
 
-### M4.1–M4.3 — Subagentes, perguntas e revisão de workers ✅
+### M4.1–M4.4 — Subagentes, perguntas, revisão e workflows ✅
 
 - `task` aceita papel, modelo do catálogo, reasoning effort, título e instruções por agente. Antes
   de cada lançamento, o usuário pode iniciar com a configuração proposta pela IA ou abrir o formulário
@@ -65,23 +77,29 @@ runtime empacotado ainda precisa de validação nesta máquina.
   três; cancelamento descarta o worktree.
 - Cada worker mostra progresso, modelo, effort, orientações e tokens/tools. O diff só é aplicado após
   aprovação explícita; conflito mantém o cartão em revisão. Descarte e falha limpam branch/worktree.
+- O histórico JSONL preserva cada segmento de fala do assistant e registra eventos versionados dos
+  cartões de configuração/sub-agent e perguntas. Ao reabrir, as opções Sim/Não reaparecem com a
+  escolha marcada; itens que ficaram pendentes viram interrompidos. Sessões antigas recuperam esses
+  cartões a partir dos argumentos e resultados de `task`/`ask_user` quando há dados suficientes.
 - Ferramentas de arquivo são limitadas à raiz do worker e mantêm o predicado original de aprovação;
   cada operação no worktree pode pedir confirmação. Toda chamada de shell do worker também exige
   aprovação, pois um comando pode referenciar caminhos absolutos fora do diretório atual.
-- Verificação: Desktop `npm run build` passou; RubyCLI typecheck/lint/format e 80 arquivos de teste
-  (1133 testes) passaram; o ciclo de worktree foi verificado em um repositório Git temporário. A
-  matriz live teve 21 falhas externas e o Electron encerrou com `STATUS_BREAKPOINT` antes dos smoke
-  tests, portanto não houve aprovação de UI em Electron.
-- A DSL `workflow` com `parallel()`/`pipeline()` continua pendente e deve ser planejada como etapa
-  própria depois do fluxo básico de subagentes.
+- Verificação desta rodada: Desktop build/typecheck e os seis smokes Electron passaram. RubyCLI
+  build/typecheck/lint/format passaram; o teste de sessões teve 43 aprovados e 1 ignorado. No Vitest
+  completo, 1159 testes passaram e os 21 casos da matriz live receberam `Invalid OpenAI API key` e
+  terminaram com assertion libuv do Node no Windows (`3221226505`).
+- A DSL `workflow` aceita `agent()`, `parallel()`, `pipeline()`, `phase()` e `log()`. O parser não
+  avalia JavaScript arbitrário, paralelismo tem limite, workers exigem confirmação e worktree, e
+  resultados estruturados são validados por JSON Schema.
 
 ---
 
 ## 1. Marcos entregues e próximos passos
 
-### M4 — Sub-agentes + orquestração ✅ (workflow DSL pendente)
+### M4 — Sub-agentes + orquestração ✅
 
 **M4.1 — Configuração e perguntas no chat ✅**
+
 - Catálogo de modelos e reasoning efforts compatíveis alimentam a configuração inline; modelos ou
   efforts indisponíveis geram uma alternativa identificada, sem troca silenciosa.
 - O usuário pode pedir papéis, modelos, efforts e orientações em linguagem natural. O orquestrador
@@ -94,14 +112,17 @@ runtime empacotado ainda precisa de validação nesta máquina.
   confundir esclarecimentos com aprovações de ferramentas.
 
 **M4.2 — Workers isolados (Core / RubyCLI) ✅**
+
 - Cada worker recebe branch e **git worktree isolado** criado de um snapshot de arquivos tracked,
   alterações locais e novos arquivos. A aplicação do diff é sempre aprovada pelo usuário.
 - `explorer` é read-only; `worker` edita no próprio worktree. Concorrência limitada a três; falha,
   descarte e cancelamento limpam worktree e branch.
-- Tool `workflow`: script JS com `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()`,
-  e resultado estruturado por schema JSON — **ainda pendente**, separada do fluxo básico entregue.
+- Tool `workflow`: DSL restrita com `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` e
+  validação de saída por JSON Schema. Scripts são analisados sem `eval`; workers mostram a
+  configuração para aprovação e nunca aplicam o diff sem revisão.
 
 **M4.3 — Acompanhamento e revisão (Desktop) ✅**
+
 - Cartões no chat mostram progresso, status, modelo, effort, papel, instruções e tokens/tools por
   agente. Perguntas/respostas aparecem no mesmo chat.
 - O diff do worktree aparece antes da ação **Aplicar diff**. Conflitos mantêm a revisão aberta e não
@@ -170,14 +191,12 @@ Configurações permite salvar a chave em armazenamento criptografado pelo SO vi
 quando nenhuma chave foi salva pela UI. A chave salva pelo Desktop é passada ao processo do engine
 por variável de ambiente, sem expô-la ao renderer.
 
-### 🟡 2.4 Goal sem auto-continuação
+### ✅ 2.4 Goal com continuação automática limitada
 
-`src/state/goal.ts` **não tem** `maxRounds`, `round` nem status `blocked`. O goal hoje é
-puramente manual: banner + `/goal` + pause/resume/complete/clear.
-
-O plano do M2 previa auto-continuação com `maxRounds` e o comando `/auto`. Não foi feito.
-Consequência: o agente não continua sozinho em direção ao objetivo — cada turno precisa de
-um humano.
+O engine armazena limite configurável de 1–100 rodadas, progresso e motivo de bloqueio. `runAutoGoal`
+continua uma rodada por vez, pausa em cancelamento, conclui quando o agente sinaliza `GOAL_DONE` e
+marca `blocked` quando o limite ou uma falha exige revisão. O Desktop oferece controle no banner e
+os comandos `/goal auto [rodadas]`, `/goal stop` e `/goal max-rounds <1-100>`; a execução é opt-in.
 
 ### ✅ 2.5 Realce de código entregue
 
@@ -194,16 +213,16 @@ A union do engine ainda não tem `usage`, `approval_request`, `approval_resolved
 de ser a fonte da verdade desses eventos — qualquer outro host teria de reinventar o mesmo
 protocolo.
 
-### 🟢 2.7 Sem lista de workspaces recentes
+### ✅ 2.7 Workspaces recentes
 
-Trocar de workspace abre um `dialog.showOpenDialog` toda vez. Não há histórico dos últimos
-projetos, nem persistência do último workspace usado entre execuções do app.
+Os oito workspaces mais recentes são persistidos em armazenamento do app, validados como diretórios e
+acessíveis pela sidebar; a troca reinicia o engine no diretório selecionado.
 
-### 🟢 2.8 Browser: uma aba só
+### ✅ 2.8 Browser com múltiplas abas
 
-Sem múltiplas abas, sem UI para limpar cookies/sessão, sem tratamento de download. A partição
-é `persist:ruby-browser`, então cookies sobrevivem entre execuções — o que é desejável, mas
-não há como limpar.
+Cada aba tem seu próprio `WebContentsView` sandboxed e compartilha a partição persistente. A UI permite
+criar, selecionar e fechar abas; trocar de aba invalida refs CDP obsoletas. Ainda não há UI para limpar
+cookies nem tratamento de downloads.
 
 ### 🟢 2.9 Comandos interativos não funcionam (deliberado)
 
@@ -230,13 +249,10 @@ Só os smoke tests em Electron. Sem vitest, sem cobertura, sem teste unitário d
 É aceitável para o tamanho atual, mas o `store.ts` já tem lógica que merecia teste
 (o parser de slash commands, o reducer de `handleMessage`).
 
-### 🟢 2.13 `vitest.config.ts` do RubyCLI tem paths obsoletos
+### ✅ 2.13 Paths de coverage atualizados
 
-O bloco de `coverage.exclude` referencia `src/model/types.ts` e `src/agent/core.ts` — **esses
-diretórios não existem mais** (viraram `src/providers/` e `src/core/`). Ou seja: o exclude não
-está excluindo o que pretendia, e a cobertura está medindo coisas diferentes do que o autor
-imaginava. `src/cli/**` continua excluído, mas boa parte da lógica saiu de lá para
-`src/core/permissions.ts` (que **é** coberto — o que é correto).
+O `coverage.exclude` agora aponta para `src/providers/types.ts` e `src/core/agent.ts`, que são os
+caminhos existentes; os excludes de ferramentas e CLI permanecem alinhados com a cobertura desejada.
 
 ---
 
@@ -267,9 +283,10 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 .\node_modules\electron\dist\electron.exe scripts/smoke-mcp.cjs
 .\node_modules\electron\dist\electron.exe scripts/smoke-browser.cjs
 .\node_modules\electron\dist\electron.exe scripts/smoke-markdown.cjs
+.\node_modules\electron\dist\electron.exe scripts/smoke-session-history.cjs
 ```
 
-Os cinco devem terminar com `RESULT PASS` e **exit code 0**. `scripts/smoke-harness.cjs` é o
+Os seis devem terminar com `RESULT PASS` e **exit code 0**. `scripts/smoke-harness.cjs` é o
 bootstrap compartilhado — **toda nova mensagem de IPC precisa ser ligada lá também**, senão o
 teste passa enquanto o app real está quebrado.
 
@@ -280,17 +297,18 @@ cd G:\VSCodeProjects\RubyCLI
 npm run typecheck && npm run lint && npm run format:check && npm test
 ```
 
-Baseline atual: **1129 passando, 0 falhando**. Qualquer falha nova é regressão.
+Verificação atual: **1159 testes passaram e 70 foram ignorados**; os 21 testes live falharam porque a
+credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com assertion nativa. Use
+`npm run eval` com uma chave válida para validar a matriz contra providers reais.
 
 ---
 
 ## 4. Decisões em aberto
 
-| Questão | Por que importa | Recomendação |
-|---|---|---|
-| **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e Windows/macOS não recebem feed de atualização | Configurar os segredos antes de publicar uma release distribuível |
-| **Ref do RubyCLI na CI** | Desktop usa `file:../RubyCLI`; CI clona um checkout irmão para compilar o engine | Fixar `RUBYCLI_REF` numa branch/commit que contenha as mudanças de engine desejadas |
-| **DSL de workflows (M4)** | Composição programática de agentes aumenta o alcance da orquestração | Planejar depois do fluxo básico de workers; inclui `parallel`, `pipeline` e schema de saída |
+| Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e Windows/macOS não recebem feed de atualização | Configurar os segredos antes de publicar uma release distribuível                   |
+| **Ref do RubyCLI na CI**          | Desktop usa `file:../RubyCLI`; CI clona um checkout irmão para compilar o engine                | Fixar `RUBYCLI_REF` numa branch/commit que contenha as mudanças de engine desejadas |
 
 ---
 
@@ -338,10 +356,9 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 
 ## 6. Ordem sugerida para continuar
 
-1. **DSL de workflow:** `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` e resultado por schema.
-2. **Auto-continuação de goal:** limite de rodadas, estado `blocked` e recuperação após falha.
-3. **Polimento da UX:** workspaces recentes, múltiplas abas do browser e uma revisão de acessibilidade
-   em tamanhos menores. São melhorias separadas da persistência de conversas já entregue.
-4. Corrigir os paths do coverage da configuração Vitest do RubyCLI (§2.13).
-5. Verificar a execução e os smoke tests da aplicação empacotada em Windows, macOS e Linux; o Electron
-   local interrompe antes do harness com `STATUS_BREAKPOINT`.
+1. Executar `npm run eval` quando houver uma chave válida para o provider configurado; investigar a
+   assertion nativa do Node se ela continuar após a autenticação funcionar.
+2. Validar os instaladores empacotados em Windows, macOS e Linux. Os smokes do checkout passaram no
+   Windows quando executados com acesso ampliado ao filesystem/processos.
+3. Considerar testes unitários para reducers e componentes do renderer se o volume de UI continuar
+   crescendo; hoje o Desktop usa os seis smokes Electron.

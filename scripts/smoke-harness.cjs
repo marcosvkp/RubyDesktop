@@ -88,11 +88,16 @@ function runScenario({
       const image = await Promise.race([
         win.webContents.capturePage(),
         new Promise((_resolve, reject) =>
-          setTimeout(() => reject(new Error("capturePage did not settle in 15s")), 15_000),
+          setTimeout(
+            () => reject(new Error("capturePage did not settle in 15s")),
+            15_000,
+          ),
         ),
       ]);
       fs.writeFileSync(target, image.toPNG());
-      log(`screenshot -> ${target} (${image.getSize().width}x${image.getSize().height})`);
+      log(
+        `screenshot -> ${target} (${image.getSize().width}x${image.getSize().height})`,
+      );
     } catch (err) {
       log(`screenshot skipped (non-fatal): ${err.message}`);
     }
@@ -138,6 +143,13 @@ function runScenario({
   /** Reads a slice of the rendered DOM back out, for assertions. */
   async function readDom(expression) {
     return win.webContents.executeJavaScript(expression);
+  }
+
+  /** Delivers an engine response through the same channel used by the main process. */
+  function sendEngineMessage(message) {
+    if (!win || win.isDestroyed())
+      throw new Error("renderer window is unavailable");
+    win.webContents.send(CHANNEL, message);
   }
 
   function startEngine() {
@@ -191,15 +203,21 @@ function runScenario({
           log(`catalog: ${message.models.length} models`);
         } else if (message.type === "approvalRequest") {
           state.approvals.push(message.request);
-          log(`approval requested: ${message.request.toolName} -> ${message.request.detail}`);
+          log(
+            `approval requested: ${message.request.toolName} -> ${message.request.detail}`,
+          );
         } else if (message.type === "event") {
           const event = message.event;
           state.eventTypes.add(event.type);
           if (event.type === "text") state.text += event.text;
           if (event.type === "tool_call")
-            log(`  tool_call: ${event.name} ${JSON.stringify(event.args).slice(0, 100)}`);
+            log(
+              `  tool_call: ${event.name} ${JSON.stringify(event.args).slice(0, 100)}`,
+            );
           if (event.type === "tool_result")
-            log(`  tool_result: ${event.name} -> ${JSON.stringify(event.result.slice(0, 140))}`);
+            log(
+              `  tool_result: ${event.name} -> ${JSON.stringify(event.result.slice(0, 140))}`,
+            );
           if (event.type === "error") log(`  engine error: ${event.message}`);
           await hooks.onEvent?.(event, api);
           if (event.type === "done") {
@@ -247,6 +265,7 @@ function runScenario({
     type,
     clickButton,
     readDom,
+    sendEngineMessage,
     state,
     post: (request) => engine?.postMessage(request),
     get engine() {
@@ -260,40 +279,66 @@ function runScenario({
   app.whenReady().then(async () => {
     // The two invoke handlers the renderer calls on mount.
     ipcMain.handle("ruby:get-workspace", () => workspace);
+    ipcMain.handle("ruby:get-recent-workspaces", () => []);
     ipcMain.handle("ruby:get-engine-info", () => undefined);
     ipcMain.handle("ruby:pick-workspace", () => undefined);
-    ipcMain.handle("ruby:save-api-key", async () => ({ ok: false, error: "Unavailable in smoke harness." }));
+    ipcMain.handle("ruby:save-api-key", async () => ({
+      ok: false,
+      error: "Unavailable in smoke harness.",
+    }));
 
     // The fire-and-forget channels, mirroring src/main/index.ts. A channel missing
     // here would make the smoke test pass while the real app was broken.
-    ipcMain.on("ruby:prompt", (_e, text) => engine?.postMessage({ type: "prompt", text }));
+    ipcMain.on("ruby:prompt", (_e, text) =>
+      engine?.postMessage({ type: "prompt", text }),
+    );
     ipcMain.on("ruby:activate-skill", (_e, name, args) =>
       engine?.postMessage({ type: "activateSkill", name, args }),
     );
     ipcMain.on("ruby:abort", () => engine?.postMessage({ type: "abort" }));
     ipcMain.on("ruby:set-workspace", () => {});
-    ipcMain.on("ruby:set-model", (_e, model) => engine?.postMessage({ type: "setModel", model }));
+    ipcMain.on("ruby:new-browser-tab", () => {});
+    ipcMain.on("ruby:select-browser-tab", () => {});
+    ipcMain.on("ruby:close-browser-tab", () => {});
+    ipcMain.on("ruby:set-model", (_e, model) =>
+      engine?.postMessage({ type: "setModel", model }),
+    );
     ipcMain.on("ruby:set-permission-mode", (_e, mode) =>
       engine?.postMessage({ type: "setPermissionMode", mode }),
     );
     ipcMain.on("ruby:approval-response", (_e, id, decision, scope, grantKey) =>
-      engine?.postMessage({ type: "approvalResponse", id, decision, scope, grantKey }),
+      engine?.postMessage({
+        type: "approvalResponse",
+        id,
+        decision,
+        scope,
+        grantKey,
+      }),
     );
     ipcMain.on("ruby:user-question-response", (_e, id, answers) =>
       engine?.postMessage({ type: "userQuestionResponse", id, answers }),
     );
     ipcMain.on("ruby:sub-agent-config-response", (_e, id, action, config) =>
-      engine?.postMessage({ type: "subAgentConfigResponse", id, action, ...config }),
+      engine?.postMessage({
+        type: "subAgentConfigResponse",
+        id,
+        action,
+        ...config,
+      }),
     );
     ipcMain.on("ruby:sub-agent-review-response", (_e, id, action) =>
       engine?.postMessage({ type: "subAgentReviewResponse", id, action }),
     );
     ipcMain.on("ruby:compact", () => engine?.postMessage({ type: "compact" }));
-    ipcMain.on("ruby:new-session", () => engine?.postMessage({ type: "session", action: "new" }));
+    ipcMain.on("ruby:new-session", () =>
+      engine?.postMessage({ type: "session", action: "new" }),
+    );
     ipcMain.on("ruby:resume-session", (_e, sessionId) =>
       engine?.postMessage({ type: "session", action: "resume", sessionId }),
     );
-    ipcMain.on("ruby:get-goal", () => engine?.postMessage({ type: "goal", action: "get" }));
+    ipcMain.on("ruby:get-goal", () =>
+      engine?.postMessage({ type: "goal", action: "get" }),
+    );
     ipcMain.on("ruby:set-goal", (_e, text) =>
       engine?.postMessage({ type: "goal", action: "set", text }),
     );
@@ -303,8 +348,21 @@ function runScenario({
     ipcMain.on("ruby:set-goal-status", (_e, status) =>
       engine?.postMessage({ type: "goal", action: "status", status }),
     );
-    ipcMain.on("ruby:clear-goal", () => engine?.postMessage({ type: "goal", action: "clear" }));
-    ipcMain.on("ruby:refresh-mcp", () => engine?.postMessage({ type: "mcp", action: "refresh" }));
+    ipcMain.on("ruby:set-goal-max-rounds", (_e, maxRounds) =>
+      engine?.postMessage({ type: "goal", action: "maxRounds", maxRounds }),
+    );
+    ipcMain.on("ruby:start-auto-goal", (_e, maxRounds) =>
+      engine?.postMessage({ type: "goal", action: "auto", maxRounds }),
+    );
+    ipcMain.on("ruby:stop-auto-goal", () =>
+      engine?.postMessage({ type: "goal", action: "stopAuto" }),
+    );
+    ipcMain.on("ruby:clear-goal", () =>
+      engine?.postMessage({ type: "goal", action: "clear" }),
+    );
+    ipcMain.on("ruby:refresh-mcp", () =>
+      engine?.postMessage({ type: "mcp", action: "refresh" }),
+    );
     ipcMain.on("ruby:add-mcp-server", (_e, name, config) =>
       engine?.postMessage({ type: "mcp", action: "add", name, config }),
     );
@@ -315,7 +373,9 @@ function runScenario({
       engine?.postMessage({ type: "mcp", action: "test", name, config }),
     );
     ipcMain.on("ruby:reset", () => engine?.postMessage({ type: "reset" }));
-    ipcMain.on("ruby:refresh-models", () => engine?.postMessage({ type: "hello" }));
+    ipcMain.on("ruby:refresh-models", () =>
+      engine?.postMessage({ type: "hello" }),
+    );
 
     win = new BrowserWindow({
       width: 1440,

@@ -20,7 +20,12 @@
  * provenance tracking already treats tool results as untrusted, and browser
  * results carry the same weight.
  */
-import { WebContentsView, type BrowserWindow, type WebContents } from "electron";
+import {
+  WebContentsView,
+  type BrowserWindow,
+  type WebContents,
+} from "electron";
+import type { BrowserTabSummary } from "@shared/ipc";
 
 /** CDP version. 1.3 is the current stable protocol. */
 const CDP_VERSION = "1.3";
@@ -70,7 +75,10 @@ const INTERACTIVE_ROLES = new Set([
 
 export class BrowserController {
   private view: WebContentsView | null = null;
-  private attached = false;
+  private readonly tabs = new Map<string, WebContentsView>();
+  private activeTabId: string | undefined;
+  private tabSequence = 0;
+  private readonly attachedViews = new WeakSet<WebContents>();
   /** Refs from the most recent snapshot, keyed by ref string. */
   private refs = new Map<string, RefEntry>();
   private refSeq = 0;
@@ -88,6 +96,18 @@ export class BrowserController {
     return this.view?.webContents ?? null;
   }
 
+  get activeTab(): string | undefined {
+    return this.activeTabId;
+  }
+
+  listTabs(): BrowserTabSummary[] {
+    return [...this.tabs].map(([id, view]) => ({
+      id,
+      url: view.webContents.getURL(),
+      title: view.webContents.getTitle() || "Nova aba",
+    }));
+  }
+
   /**
    * Creates the view if needed and places it.
    *
@@ -100,56 +120,142 @@ export class BrowserController {
     if (!win) throw new Error("no window to attach the browser to");
 
     if (!this.view) {
-      this.view = new WebContentsView({
-        webPreferences: {
-          // Page content is untrusted: no preload, no Node, OS sandbox on.
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-          // A distinct partition keeps page cookies away from the app's session.
-          partition: "persist:ruby-browser",
-        },
-      });
-      win.contentView.addChildView(this.view);
-    }
-
-    this.view.setBounds(bounds);
-    // A new tab-like session starts blank rather than resuming the last page.
-    if (!this.view.webContents.getURL()) {
-      void this.view.webContents.loadURL("about:blank");
+      const existing =
+        this.activeTabId && this.tabs.has(this.activeTabId)
+          ? this.activeTabId
+          : this.tabs.keys().next().value;
+      if (existing) this.activateTab(existing, bounds);
+      else this.newTab(bounds);
+    } else {
+      this.setBounds(bounds);
     }
   }
 
-  setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
-    this.view?.setBounds(bounds);
-  }
-
-  close(): void {
-    if (!this.view) return;
+  /** Creates a separate sandboxed page process that shares the browser cookie jar. */
+  newTab(bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): string {
     const win = this.getWindow();
-    const view = this.view;
-    this.view = null;
-    this.attached = false;
-    this.refs.clear();
+    if (!win) throw new Error("no window to attach the browser to");
+    const view = new WebContentsView({
+      webPreferences: {
+        // Page content is untrusted: no preload, no Node, OS sandbox on.
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        // Tabs share the browser's explicit persistent cookie partition.
+        partition: "persist:ruby-browser",
+      },
+    });
+    const id = `browser-tab-${++this.tabSequence}`;
+    this.tabs.set(id, view);
+    win.contentView.addChildView(view);
+    if (!view.webContents.getURL())
+      void view.webContents.loadURL("about:blank");
+    this.activateTab(id, bounds);
+    return id;
+  }
+
+  selectTab(
+    id: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ): void {
+    if (!this.tabs.has(id)) return;
+    this.activateTab(id, bounds);
+  }
+
+  closeTab(
+    id: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ): void {
+    const closing = this.tabs.get(id);
+    if (!closing) return;
+    const win = this.getWindow();
+    this.tabs.delete(id);
     try {
-      win?.contentView.removeChildView(view);
+      win?.contentView.removeChildView(closing);
     } catch {
       // Window already gone.
     }
     try {
-      view.webContents.close();
+      closing.webContents.close();
     } catch {
       // Already destroyed.
     }
+    if (this.activeTabId !== id) return;
+    this.view = null;
+    this.activeTabId = undefined;
+    this.refs.clear();
+    const fallback = [...this.tabs.keys()].at(-1);
+    if (fallback) this.activateTab(fallback, bounds);
+  }
+
+  setBounds(bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): void {
+    this.view?.setBounds(bounds);
+  }
+
+  close(): void {
+    const win = this.getWindow();
+    const views = [...this.tabs.values()];
+    if (views.length === 0 && this.view) views.push(this.view);
+    this.tabs.clear();
+    this.view = null;
+    this.activeTabId = undefined;
+    this.refs.clear();
+    for (const view of views) {
+      try {
+        win?.contentView.removeChildView(view);
+      } catch {
+        // Window already gone.
+      }
+      try {
+        view.webContents.close();
+      } catch {
+        // Already destroyed.
+      }
+    }
+  }
+
+  /** Hides the previous native view and raises the selected tab over the page area. */
+  private activateTab(
+    id: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ): void {
+    const next = this.tabs.get(id);
+    const win = this.getWindow();
+    if (!next || !win) return;
+    if (this.view && this.view !== next) {
+      this.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    }
+    this.view = next;
+    this.activeTabId = id;
+    this.refs.clear();
+    this.refSeq = 0;
+    try {
+      win.contentView.removeChildView(next);
+    } catch {
+      // The tab may not have been attached yet.
+    }
+    win.contentView.addChildView(next);
+    next.setBounds(bounds);
   }
 
   /** Attaches the debugger once. Idempotent. */
   private async ensureAttached(): Promise<WebContents> {
-    if (!this.view) throw new Error("the browser is not open; call browser_open first");
+    if (!this.view)
+      throw new Error("the browser is not open; call browser_open first");
     const wc = this.view.webContents;
-    if (!this.attached) {
+    if (!this.attachedViews.has(wc)) {
       await wc.debugger.attach(CDP_VERSION);
-      this.attached = true;
+      this.attachedViews.add(wc);
       // Enabling the Accessibility domain is what makes getFullAXTree cheap; it is
       // otherwise computed on demand per call.
       await wc.debugger.sendCommand("Accessibility.enable");
@@ -159,13 +265,18 @@ export class BrowserController {
       // simply never run, and the agent's clicks silently do nothing. Relying on
       // real OS focus instead would mean stealing focus from whatever the user is
       // doing, which is both rude and unreliable (any click elsewhere breaks it).
-      await wc.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
+      await wc.debugger.sendCommand("Emulation.setFocusEmulationEnabled", {
+        enabled: true,
+      });
     }
     return wc;
   }
 
   /** Runs a CDP command, serialised against other commands. */
-  private send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+  private send<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+  ): Promise<T> {
     const run = async (): Promise<T> => {
       const wc = await this.ensureAttached();
       return (await wc.debugger.sendCommand(method, params)) as T;
@@ -197,7 +308,8 @@ export class BrowserController {
 
   /** Navigates and waits for the load to settle. */
   async navigate(url: string): Promise<BrowserSnapshot> {
-    if (!this.view) throw new Error("the browser is not open; call browser_open first");
+    if (!this.view)
+      throw new Error("the browser is not open; call browser_open first");
 
     // Reject anything that is not a real web URL: `file://` would let a page read
     // the local disk through the browser, which is not what this feature is for.
@@ -208,7 +320,9 @@ export class BrowserController {
       throw new Error(`'${url}' is not a valid URL`);
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error(`only http and https are allowed, got '${parsed.protocol}'`);
+      throw new Error(
+        `only http and https are allowed, got '${parsed.protocol}'`,
+      );
     }
 
     // A navigation invalidates every ref from the previous page.
@@ -220,7 +334,8 @@ export class BrowserController {
 
   async goBack(): Promise<BrowserSnapshot> {
     const wc = this.view?.webContents;
-    if (!wc) throw new Error("the browser is not open; call browser_open first");
+    if (!wc)
+      throw new Error("the browser is not open; call browser_open first");
     this.refs.clear();
     if (wc.navigationHistory.canGoBack()) {
       wc.navigationHistory.goBack();
@@ -237,9 +352,12 @@ export class BrowserController {
    */
   async snapshot(): Promise<BrowserSnapshot> {
     const wc = this.view?.webContents;
-    if (!wc) throw new Error("the browser is not open; call browser_open first");
+    if (!wc)
+      throw new Error("the browser is not open; call browser_open first");
 
-    const { nodes } = await this.send<{ nodes: RawAxNode[] }>("Accessibility.getFullAXTree");
+    const { nodes } = await this.send<{ nodes: RawAxNode[] }>(
+      "Accessibility.getFullAXTree",
+    );
 
     this.refs.clear();
     this.refSeq = 0;
@@ -252,7 +370,8 @@ export class BrowserController {
       if (!role) continue;
       // Generic containers carry no information; their children are emitted
       // independently, so skipping them only removes noise.
-      if (role === "generic" || role === "none" || role === "InlineTextBox") continue;
+      if (role === "generic" || role === "none" || role === "InlineTextBox")
+        continue;
 
       const name = axValue(node.name) ?? "";
       const value = axValue(node.value);
@@ -271,7 +390,8 @@ export class BrowserController {
       const parts = [`- ${role}`];
       if (label) parts.push(`"${label}"`);
       if (ref) parts.push(`[ref=${ref}]`);
-      if (value !== undefined && value !== "") parts.push(`value="${truncate(value, 100)}"`);
+      if (value !== undefined && value !== "")
+        parts.push(`value="${truncate(value, 100)}"`);
       lines.push(parts.join(" "));
     }
 
@@ -285,7 +405,9 @@ export class BrowserController {
       title: wc.getTitle(),
       text:
         text +
-        (capped ? `\n\n[truncated: ${lines.length - MAX_LINES} more nodes not shown]` : ""),
+        (capped
+          ? `\n\n[truncated: ${lines.length - MAX_LINES} more nodes not shown]`
+          : ""),
       refCount,
     };
   }
@@ -334,17 +456,36 @@ export class BrowserController {
   /** Clicks an element with real mouse events, after scrolling it into view. */
   async click(ref: string): Promise<BrowserSnapshot> {
     const entry = this.requireRef(ref);
-    await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: entry.backendNodeId });
+    await this.send("DOM.scrollIntoViewIfNeeded", {
+      backendNodeId: entry.backendNodeId,
+    });
     const { x, y } = await this.centreOf(entry);
     const at = { x: Math.round(x), y: Math.round(y) };
     this.focusPage();
 
     // `buttons` is the pressed-button bitmask, and Chromium's input pipeline uses
     // it — not just `button` — to decide that a press is a real click.
-    const base = { ...at, button: "left" as const, clickCount: 1, pointerType: "mouse" as const };
-    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...base, buttons: 0 });
-    await this.send("Input.dispatchMouseEvent", { type: "mousePressed", ...base, buttons: 1 });
-    await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...base, buttons: 0 });
+    const base = {
+      ...at,
+      button: "left" as const,
+      clickCount: 1,
+      pointerType: "mouse" as const,
+    };
+    await this.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      ...base,
+      buttons: 0,
+    });
+    await this.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...base,
+      buttons: 1,
+    });
+    await this.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      ...base,
+      buttons: 0,
+    });
 
     // A click often navigates or opens a menu; give it a beat before snapshotting
     // so the returned tree describes the result rather than the page that was.
@@ -354,9 +495,15 @@ export class BrowserController {
   }
 
   /** Focuses an element and inserts text as if typed. */
-  async type(ref: string, text: string, submit = false): Promise<BrowserSnapshot> {
+  async type(
+    ref: string,
+    text: string,
+    submit = false,
+  ): Promise<BrowserSnapshot> {
     const entry = this.requireRef(ref);
-    await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: entry.backendNodeId });
+    await this.send("DOM.scrollIntoViewIfNeeded", {
+      backendNodeId: entry.backendNodeId,
+    });
     this.focusPage();
     await this.send("DOM.focus", { backendNodeId: entry.backendNodeId });
     // insertText fires a real input event, which is what React-controlled fields
@@ -380,9 +527,13 @@ export class BrowserController {
   }
 
   /** Scrolls the page by a number of pixels, or to the top/bottom. */
-  async scroll(direction: "up" | "down" | "top" | "bottom", amount = 600): Promise<BrowserSnapshot> {
+  async scroll(
+    direction: "up" | "down" | "top" | "bottom",
+    amount = 600,
+  ): Promise<BrowserSnapshot> {
     const wc = this.view?.webContents;
-    if (!wc) throw new Error("the browser is not open; call browser_open first");
+    if (!wc)
+      throw new Error("the browser is not open; call browser_open first");
 
     // Reading layout requires the DOM domain, and the scroll itself is a page
     // operation rather than an input event — this is both simpler and more
@@ -400,7 +551,9 @@ export class BrowserController {
   }
 
   /** Captures the viewport as a PNG and writes it to `path`. */
-  async screenshot(path: string): Promise<{ path: string; width: number; height: number }> {
+  async screenshot(
+    path: string,
+  ): Promise<{ path: string; width: number; height: number }> {
     // `Page.captureScreenshot` waits for a compositor frame. An offscreen or hidden
     // view may never produce one, and the command then never settles — which would
     // consume the entire turn budget. Bound it and fail with a clear reason.
@@ -445,7 +598,11 @@ interface RawAxNode {
 
 function axValue(field: { value?: unknown } | undefined): string | undefined {
   const value = field?.value;
-  return typeof value === "string" ? value : value === undefined ? undefined : String(value);
+  return typeof value === "string"
+    ? value
+    : value === undefined
+      ? undefined
+      : String(value);
 }
 
 function truncate(value: string, max: number): string {
@@ -457,7 +614,11 @@ function delay(ms: number): Promise<void> {
 }
 
 /** Rejects if `promise` has not settled within `ms`. */
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), ms);
     promise.then(

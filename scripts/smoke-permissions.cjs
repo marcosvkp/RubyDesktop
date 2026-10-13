@@ -39,6 +39,7 @@ const STAMP = Date.now().toString(36);
 const ALLOW_DIR = `.build-cache-a${STAMP}`;
 const DENY_DIR = `.build-cache-b${STAMP}`;
 const GOAL_TEXT = `Keep the permission gate honest (${STAMP})`;
+const AUTO_GOAL_TEXT = "Reply with exactly GOAL_DONE and nothing else.";
 
 const PROMPT_ALLOW = `Create the directory ${ALLOW_DIR} in the workspace using the bash tool, then report the command output verbatim.`;
 const PROMPT_DENY = `Create the directory ${DENY_DIR} in the workspace using the bash tool, then report the command output verbatim.`;
@@ -52,24 +53,35 @@ const PHASE = {
   ALLOW: "allow-turn",
   DENY: "deny-turn",
   GOAL: "goal",
+  AUTO_GOAL_SETUP: "auto-goal-setup",
+  AUTO_GOAL: "auto-goal",
+  COMPACT_STARTING: "compact-starting",
   COMPACT: "compact",
   DONE: "done",
 };
 
 runScenario({
   name: "perm",
-  workspace: WORKSPACE,  timeoutMs: Number(process.env.SMOKE_TIMEOUT_MS || 300_000),
+  workspace: WORKSPACE,
+  timeoutMs: Number(process.env.SMOKE_TIMEOUT_MS || 300_000),
   hooks: {
     async onReady(ready, api) {
       if (ready.permissionMode !== "normal") {
-        return api.finish(1, `expected permissionMode=normal, got ${ready.permissionMode}`);
+        return api.finish(
+          1,
+          `expected permissionMode=normal, got ${ready.permissionMode}`,
+        );
       }
       api.state.phase = PHASE.ALLOW;
       api.state.toolResults = [];
       api.state.goalSeen = null;
-      api.log(`phase ${PHASE.ALLOW}: asking for a mutating command (mkdir ${ALLOW_DIR})`);
+      api.log(
+        `phase ${PHASE.ALLOW}: asking for a mutating command (mkdir ${ALLOW_DIR})`,
+      );
       const typed = await api.type(PROMPT_ALLOW);
-      if (typed !== "sent") api.finish(1, `could not drive the Composer: ${typed}`);    },
+      if (typed !== "sent")
+        api.finish(1, `could not drive the Composer: ${typed}`);
+    },
 
     async onMessage(message, api) {
       const { state } = api;
@@ -91,14 +103,26 @@ runScenario({
         })()`);
 
         if (!modal.present) {
-          return api.finish(1, "engine asked for approval but no modal was rendered");
+          return api.finish(
+            1,
+            "engine asked for approval but no modal was rendered",
+          );
         }
         api.log(`modal buttons: ${modal.buttons.join(" | ")}`);
         if (!modal.text.includes(message.request.toolName)) {
-          return api.finish(1, `modal does not name the tool '${message.request.toolName}'`);
+          return api.finish(
+            1,
+            `modal does not name the tool '${message.request.toolName}'`,
+          );
         }
-        if (!modal.buttons.includes("Permitir uma vez") || !modal.buttons.includes("Negar")) {
-          return api.finish(1, "modal is missing the Permitir uma vez / Negar buttons");
+        if (
+          !modal.buttons.includes("Permitir uma vez") ||
+          !modal.buttons.includes("Negar")
+        ) {
+          return api.finish(
+            1,
+            "modal is missing the Permitir uma vez / Negar buttons",
+          );
         }
 
         const phase = state.phase;
@@ -106,13 +130,18 @@ runScenario({
           if (SHOT_MODAL) await api.screenshot(SHOT_MODAL);
           const clicked = await api.clickButton("Permitir uma vez");
           api.log(`clicked: ${clicked}`);
-          if (clicked !== "Permitir uma vez") return api.finish(1, "could not click Permitir uma vez");
+          if (clicked !== "Permitir uma vez")
+            return api.finish(1, "could not click Permitir uma vez");
         } else if (phase === PHASE.DENY) {
           const clicked = await api.clickButton("Negar");
           api.log(`clicked: ${clicked}`);
-          if (clicked !== "Negar") return api.finish(1, "could not click Negar");
+          if (clicked !== "Negar")
+            return api.finish(1, "could not click Negar");
         } else {
-          return api.finish(1, `unexpected approval request during phase ${phase}`);
+          return api.finish(
+            1,
+            `unexpected approval request during phase ${phase}`,
+          );
         }
         return;
       }
@@ -121,10 +150,16 @@ runScenario({
       if (message.type === "goal" && state.phase === PHASE.GOAL) {
         if (!message.goal) return api.finish(1, "goal was not created");
         if (message.goal.text !== GOAL_TEXT) {
-          return api.finish(1, `goal text mismatch: ${JSON.stringify(message.goal.text)}`);
+          return api.finish(
+            1,
+            `goal text mismatch: ${JSON.stringify(message.goal.text)}`,
+          );
         }
         if (message.goal.status !== "active") {
-          return api.finish(1, `expected an active goal, got ${message.goal.status}`);
+          return api.finish(
+            1,
+            `expected an active goal, got ${message.goal.status}`,
+          );
         }
         api.log(`goal stored: ${message.goal.text}`);
 
@@ -142,15 +177,87 @@ runScenario({
             active: el.innerText.toLowerCase().includes("goal"),
           };
         })()`);
-        if (!banner.present) return api.finish(1, "goal banner did not render in the DOM");
+        if (!banner.present)
+          return api.finish(1, "goal banner did not render in the DOM");
         if (!banner.text.includes(GOAL_TEXT)) {
-          return api.finish(1, `goal banner shows the wrong text: ${JSON.stringify(banner.text)}`);
+          return api.finish(
+            1,
+            `goal banner shows the wrong text: ${JSON.stringify(banner.text)}`,
+          );
         }
         api.log("goal banner rendered");
 
+        state.phase = PHASE.AUTO_GOAL_SETUP;
+        api.log(
+          `phase ${PHASE.AUTO_GOAL_SETUP}: set up a bounded automatic run`,
+        );
+        await api.type(`/goal ${AUTO_GOAL_TEXT}`);
+        return;
+      }
+
+      if (message.type === "goal" && state.phase === PHASE.AUTO_GOAL_SETUP) {
+        if (!message.goal || message.goal.text !== AUTO_GOAL_TEXT) {
+          return api.finish(1, "automatic goal was not saved");
+        }
+        await new Promise((r) => setTimeout(r, 300));
+        state.phase = PHASE.AUTO_GOAL;
+        state.autoGoalStarted = false;
+        state.autoGoalFinished = false;
+        const clicked = await api.clickButton("Continuar");
+        if (clicked !== "Continuar") {
+          return api.finish(
+            1,
+            "automatic goal continue control was not available",
+          );
+        }
+        api.log("started automatic goal from the banner");
+        return;
+      }
+
+      if (message.type === "goalAuto" && state.phase === PHASE.AUTO_GOAL) {
+        if (message.running) {
+          state.autoGoalStarted = true;
+          api.log("automatic goal reported running");
+          return;
+        }
+        if (!state.autoGoalStarted || !state.autoGoalFinished) {
+          return api.finish(
+            1,
+            "automatic goal stopped without a bounded result",
+          );
+        }
+        state.phase = PHASE.COMPACT_STARTING;
+        api.log("automatic goal is idle; waiting for the engine ready state");
+        return;
+      }
+
+      if (
+        message.type === "status" &&
+        message.status === "ready" &&
+        state.phase === PHASE.COMPACT_STARTING
+      ) {
         state.phase = PHASE.COMPACT;
         api.log(`phase ${PHASE.COMPACT}: /compact`);
         await api.type("/compact");
+        return;
+      }
+
+      if (message.type === "goal" && state.phase === PHASE.AUTO_GOAL) {
+        if (
+          !message.goal ||
+          !["complete", "blocked"].includes(message.goal.status)
+        )
+          return;
+        if (message.goal.rounds < 1) {
+          return api.finish(1, "automatic goal did not record its first round");
+        }
+        if (message.goal.status === "blocked" && !message.goal.blockedReason) {
+          return api.finish(1, "blocked goal did not explain why it stopped");
+        }
+        state.autoGoalFinished = true;
+        api.log(
+          `automatic goal stopped safely with status=${message.goal.status}, rounds=${message.goal.rounds}/${message.goal.maxRounds}`,
+        );
         return;
       }
 
@@ -160,67 +267,94 @@ runScenario({
           state.sawCompacting = true;
           return;
         }
-        if (!state.sawCompacting) return api.finish(1, "never saw compaction start");
+        if (!state.sawCompacting)
+          return api.finish(1, "never saw compaction start");
         api.log("compaction finished");
 
         state.phase = PHASE.DONE;
         if (SHOT_GOAL) await api.screenshot(SHOT_GOAL);
-        return api.finish(0, "approval allow+deny, goal and compact all verified");
+        return api.finish(
+          0,
+          "approval allow+deny, goal auto-continuation and compact all verified",
+        );
       }
 
       // --- Tool results -------------------------------------------------------
       if (message.type === "event" && message.event.type === "tool_result") {
-        state.toolResults.push({ name: message.event.name, result: message.event.result });
+        state.toolResults.push({
+          name: message.event.name,
+          result: message.event.result,
+        });
       }
     },
 
     async onIdle(state, api) {
       if (state.phase === PHASE.ALLOW) {
-        const blocked = state.toolResults.filter((r) => r.result.startsWith("Blocked:"));
+        const blocked = state.toolResults.filter((r) =>
+          r.result.startsWith("Blocked:"),
+        );
         if (blocked.length > 0) {
-          return api.finish(1, `allowed call was still blocked: ${blocked[0].result}`);
+          return api.finish(
+            1,
+            `allowed call was still blocked: ${blocked[0].result}`,
+          );
         }
         const ran = state.toolResults.find((r) => r.name === "bash");
         if (!ran) return api.finish(1, "the allowed bash call never executed");
-        api.log(`allow path executed: ${JSON.stringify(ran.result.slice(0, 120))}`);
+        api.log(
+          `allow path executed: ${JSON.stringify(ran.result.slice(0, 120))}`,
+        );
 
         // The strongest available evidence: the command's side effect is on disk.
         // A tool that "succeeded" without doing anything would pass a weaker check.
         const created = fs.existsSync(path.join(WORKSPACE, ALLOW_DIR));
         if (!created) {
-          return api.finish(1, `the allowed command reported no block but ${ALLOW_DIR} was not created`);
+          return api.finish(
+            1,
+            `the allowed command reported no block but ${ALLOW_DIR} was not created`,
+          );
         }
         api.log(`allow path side effect confirmed: ${ALLOW_DIR} exists`);
 
         state.phase = PHASE.DENY;
         state.toolResults = [];
         state.text = "";
-        api.log(`phase ${PHASE.DENY}: asking for a command that will be denied`);
+        api.log(
+          `phase ${PHASE.DENY}: asking for a command that will be denied`,
+        );
         const typed = await api.type(PROMPT_DENY);
-        if (typed !== "sent") api.finish(1, `could not drive the Composer: ${typed}`);
+        if (typed !== "sent")
+          api.finish(1, `could not drive the Composer: ${typed}`);
         return;
       }
 
       if (state.phase === PHASE.DENY) {
-        const blocked = state.toolResults.find((r) => r.result.startsWith("Blocked:"));
+        const blocked = state.toolResults.find((r) =>
+          r.result.startsWith("Blocked:"),
+        );
         if (!blocked) {
           return api.finish(
             1,
             `denied call was not reported as blocked; results: ${JSON.stringify(state.toolResults)}`,
           );
         }
-        api.log(`deny path reported: ${JSON.stringify(blocked.result.slice(0, 120))}`);
+        api.log(
+          `deny path reported: ${JSON.stringify(blocked.result.slice(0, 120))}`,
+        );
 
         // And the denial must have actually prevented the side effect.
         if (fs.existsSync(path.join(WORKSPACE, DENY_DIR))) {
           return api.finish(1, `the denied command still created ${DENY_DIR}`);
         }
-        api.log(`deny path side effect correctly absent: ${DENY_DIR} does not exist`);
+        api.log(
+          `deny path side effect correctly absent: ${DENY_DIR} does not exist`,
+        );
 
         state.phase = PHASE.GOAL;
         api.log(`phase ${PHASE.GOAL}: /goal`);
         const typed = await api.type(`/goal ${GOAL_TEXT}`);
-        if (typed !== "sent") api.finish(1, `could not drive the Composer: ${typed}`);
+        if (typed !== "sent")
+          api.finish(1, `could not drive the Composer: ${typed}`);
         return;
       }
     },

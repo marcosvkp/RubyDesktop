@@ -33,12 +33,18 @@ export function App(): React.JSX.Element {
         useStore.setState({ workspace: dir });
       }
     });
+    void window.ruby.getRecentWorkspaces().then((recentWorkspaces) => {
+      useStore.setState({ recentWorkspaces });
+    });
   }, []);
 
   // Reveal the browser as soon as the engine opens one: an agent driving a page
   // the user cannot see is the one outcome worth preventing outright.
   useEffect(() => {
-    if (browserOpen) setShowBrowser(true);
+    if (browserOpen) {
+      setShowBrowser(true);
+      setShowMcp(false);
+    }
   }, [browserOpen]);
 
   const closeBrowserPanel = (): void => {
@@ -62,28 +68,43 @@ export function App(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       <TitleBar onOpenSettings={() => setShowSettings(true)} />
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         <Sidebar
           workspace={workspace}
-          onToggleMcp={() => setShowMcp((v) => !v)}
+          onToggleMcp={() => {
+            const next = !showMcp;
+            setShowMcp(next);
+            if (next) setShowBrowser(false);
+          }}
           mcpOpen={showMcp}
           onToggleBrowser={() => {
             if (showBrowser) closeBrowserPanel();
-            else window.ruby.openBrowser();
+            else {
+              setShowMcp(false);
+              window.ruby.openBrowser();
+            }
           }}
           browserOpen={showBrowser}
         />
         <main className="flex min-w-0 flex-1 flex-col bg-page">
-          {fatal ? <FatalBanner message={fatal} onDismiss={dismissFatal} /> : null}
+          {fatal ? (
+            <FatalBanner message={fatal} onDismiss={dismissFatal} />
+          ) : null}
           <GoalBanner />
-          {!showBrowser ? <BrowserHiddenNotice onShow={() => setShowBrowser(true)} /> : null}
+          {!showBrowser ? (
+            <BrowserHiddenNotice onShow={() => setShowBrowser(true)} />
+          ) : null}
           <ChatView />
-          {showOutput ? <OutputPanel onClose={() => setShowOutput(false)} /> : null}
+          {showOutput ? (
+            <OutputPanel onClose={() => setShowOutput(false)} />
+          ) : null}
           <Composer />
         </main>
         {showMcp ? <McpPanel onClose={() => setShowMcp(false)} /> : null}
         {showBrowser ? <BrowserPanel onClose={closeBrowserPanel} /> : null}
-      {showSettings ? <SettingsModal onClose={() => setShowSettings(false)} /> : null}
+        {showSettings ? (
+          <SettingsModal onClose={() => setShowSettings(false)} />
+        ) : null}
       </div>
       <StatusBar
         outputOpen={showOutput}
@@ -109,8 +130,8 @@ function FatalBanner({
 }): React.JSX.Element {
   return (
     <div className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 px-5 py-3">
-        <span className="mt-0.5 text-xs font-semibold tracking-wide text-destructive uppercase">
-          Agente
+      <span className="mt-0.5 text-xs font-semibold tracking-wide text-destructive uppercase">
+        Agente
       </span>
       <p className="flex-1 text-sm text-foreground/90">{message}</p>
       <button

@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { Plug, Plus, RefreshCw, Trash2, X, Check, AlertTriangle } from "lucide-react";
+import {
+  Plug,
+  Plus,
+  RefreshCw,
+  Trash2,
+  X,
+  Check,
+  AlertTriangle,
+} from "lucide-react";
 import { useStore } from "../store";
 import { cn } from "../lib/utils";
 import type { McpServerDraft } from "@shared/ipc";
@@ -12,7 +20,11 @@ import type { McpServerDraft } from "@shared/ipc";
  * and try one before saving it. The "test" step matters — a broken server in
  * mcp.json is otherwise only visible as tools that silently never appear.
  */
-export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function McpPanel({
+  onClose,
+}: {
+  onClose: () => void;
+}): React.JSX.Element {
   const servers = useStore((s) => s.mcpServers);
   const test = useStore((s) => s.mcpTest);
   const refresh = useStore((s) => s.refreshMcp);
@@ -25,7 +37,7 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
   return (
     <div
       data-testid="mcp-panel"
-      className="flex w-96 shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+      className="flex w-96 min-w-0 shrink-0 flex-col border-l border-sidebar-border bg-sidebar max-[1000px]:w-[min(20rem,48vw)]"
     >
       <header className="flex items-center gap-2 border-b border-sidebar-border px-4 py-3">
         <Plug className="h-3.5 w-3.5 text-chart-1" />
@@ -65,7 +77,8 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
 
         {servers.length === 0 && !adding ? (
           <p className="px-1 py-2 text-xs text-muted-foreground">
-            Nenhum servidor MCP configurado. Adicione um para incluir ferramentas ao agente.
+            Nenhum servidor MCP configurado. Adicione um para incluir
+            ferramentas ao agente.
           </p>
         ) : null}
 
@@ -96,7 +109,9 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
               </div>
 
               {server.error ? (
-                <p className="mt-1 text-[11px] break-words text-chart-3">{server.error}</p>
+                <p className="mt-1 text-[11px] break-words text-chart-3">
+                  {server.error}
+                </p>
               ) : null}
 
               {server.tools.length > 0 ? (
@@ -112,7 +127,9 @@ export function McpPanel({ onClose }: { onClose: () => void }): React.JSX.Elemen
                   ))}
                 </ul>
               ) : server.connected && !server.error ? (
-                <p className="mt-1 text-[11px] text-muted-foreground">conectado, sem ferramentas</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  conectado, sem ferramentas
+                </p>
               ) : null}
             </div>
           ))}
@@ -160,10 +177,12 @@ function AddServerForm({
 
   // Any edit invalidates a previous test result: leaving it on screen would show a
   // green "connected" for a config that is no longer the one being described.
-  const edit = <T,>(setter: (value: T) => void) => (value: T): void => {
-    clearTest();
-    setter(value);
-  };
+  const edit =
+    <T,>(setter: (value: T) => void) =>
+    (value: T): void => {
+      clearTest();
+      setter(value);
+    };
 
   const draft = (): McpServerDraft =>
     transport === "http"
@@ -176,7 +195,9 @@ function AddServerForm({
           args: args.trim() ? args.trim().split(/\s+/) : undefined,
         };
 
-  const valid = name.trim() !== "" && (transport === "http" ? url.trim() !== "" : command.trim() !== "");
+  const valid =
+    name.trim() !== "" &&
+    (transport === "http" ? url.trim() !== "" : command.trim() !== "");
 
   return (
     <div className="mb-3 rounded-lg border border-line bg-card p-3">
@@ -286,8 +307,8 @@ function AddServerForm({
       </div>
 
       <p className="mt-2 text-[10px] text-muted-foreground">
-        Salvo em ~/.rubycli/mcp.json. O teste conecta sem salvar, para verificar o servidor
-        antes de incluir as ferramentas no agente.
+        Salvo em ~/.rubycli/mcp.json. O teste conecta sem salvar, para verificar
+        o servidor antes de incluir as ferramentas no agente.
       </p>
     </div>
   );
@@ -302,7 +323,9 @@ function Field({
 }): React.JSX.Element {
   return (
     <label className="mb-2 block">
-      <span className="mb-0.5 block text-[10px] text-muted-foreground">{label}</span>
+      <span className="mb-0.5 block text-[10px] text-muted-foreground">
+        {label}
+      </span>
       {children}
     </label>
   );

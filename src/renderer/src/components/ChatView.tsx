@@ -29,7 +29,8 @@ export function ChatView(): React.JSX.Element {
   const updateScrollPosition = (): void => {
     const element = scrollRef.current;
     if (!element) return;
-    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+    const atBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     pinnedRef.current = atBottom;
     if (atBottom) setShowJumpToLatest(false);
   };
@@ -55,7 +56,10 @@ export function ChatView(): React.JSX.Element {
           type="button"
           onClick={() => {
             pinnedRef.current = true;
-            bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+            bottomRef.current?.scrollIntoView({
+              behavior: "smooth",
+              block: "end",
+            });
             setShowJumpToLatest(false);
           }}
           className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-lg shadow-black/30 transition-colors hover:border-white/30"
@@ -81,7 +85,10 @@ function Item({ item }: { item: ChatItem }): React.JSX.Element {
 
     case "assistant":
       return (
-        <div className="text-sm text-foreground">
+        <div
+          data-testid="assistant-message"
+          className="text-sm text-foreground"
+        >
           <Markdown text={item.text} streaming={item.streaming} />
         </div>
       );
@@ -120,17 +127,20 @@ function Item({ item }: { item: ChatItem }): React.JSX.Element {
 }
 
 function EmptyState({ status }: { status: string }): React.JSX.Element {
-  const label = status === "ready" ? "Pronto" : status === "busy" ? "Trabalhando" : status;
+  const label =
+    status === "ready" ? "Pronto" : status === "busy" ? "Trabalhando" : status;
   return (
     <div className="flex flex-col items-center gap-3 py-20 text-center">
       <div className="eyebrow">{label}</div>
       <h1 className="text-2xl font-semibold tracking-tight">
         <span className="text-foreground">Peça o que precisar.</span>{" "}
-        <span className="text-muted-foreground">O agente trabalha no projeto.</span>
+        <span className="text-muted-foreground">
+          O agente trabalha no projeto.
+        </span>
       </h1>
       <p className="max-w-md text-sm text-muted-foreground">
-        O agente pode ler e editar arquivos e executar comandos. As ações são exibidas enquanto
-        acontecem.
+        O agente pode ler e editar arquivos e executar comandos. As ações são
+        exibidas enquanto acontecem.
       </p>
     </div>
   );
