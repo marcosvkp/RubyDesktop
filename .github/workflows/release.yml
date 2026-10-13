@@ -105,15 +105,16 @@ jobs:
         shell: bash
         run: |
           tag="$RUBY_DESKTOP_RELEASE_TAG"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            is_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft')"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
             if [ "$is_draft" != "true" ] && [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
               echo "Release $tag is already published; refusing to replace its assets." >&2
               exit 1
             fi
-            gh release upload "$tag" release-assets/* --clobber
+            gh release upload "$tag" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
               --draft \
               --title "Ruby Desktop $tag" \
               --notes "Instaladores e metadados de atualização do Ruby Desktop. Revise os artefatos antes de publicar esta release."
