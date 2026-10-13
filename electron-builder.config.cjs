@@ -55,6 +55,8 @@ module.exports = {
   },
   mac: {
     icon: "design/brand/ruby-mark.png",
+    // Public builds remain unsigned until a Developer ID certificate is configured.
+    ...(macSigningConfigured ? {} : { identity: null }),
     target: [
       { target: "dmg", arch: ["x64", "arm64"] },
       { target: "zip", arch: ["x64", "arm64"] },
@@ -63,6 +65,7 @@ module.exports = {
   linux: {
     icon: "design/brand/ruby-mark.png",
     category: "Development",
+    maintainer: "RubyCLI",
     target: [
       { target: "AppImage", arch: ["x64"] },
       { target: "deb", arch: ["x64"] },
