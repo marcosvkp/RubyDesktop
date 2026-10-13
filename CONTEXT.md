@@ -6,11 +6,13 @@
 > Para o *porquê* das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
-**Estado:** M0–M5 implementados neste checkout; a primeira release ainda não foi publicada. RubyCLI:
-**1133 testes determinísticos passaram**; a matriz live de OpenAI não passou neste ambiente. O
-Desktop build/typecheck e o empacotamento Windows passaram. O Electron encerra com
-`STATUS_BREAKPOINT` antes de iniciar o smoke harness, então a UI empacotada e o runtime MCP ainda
-precisam de validação em uma máquina que consiga abrir o Electron.
+**Estado:** M0–M5 implementados neste checkout; a release `v0.1.0` foi publicada com artefatos
+Windows, macOS e Linux. O Desktop está em `51765aa`; a engine RubyCLI foi enviada ao repositório
+próprio em `5d6b987`, e o workflow de release a compila diretamente do GitHub (sem depender da
+publicação no npm). RubyCLI: **1133 testes determinísticos passaram e 71 foram ignorados**; a matriz
+live teve 21 falhas de subprocesso no Windows (`3221226505`). O build multiplataforma da release
+passou. O Electron local encerra com `STATUS_BREAKPOINT` antes de iniciar o smoke harness, então o
+runtime empacotado ainda precisa de validação nesta máquina.
 
 ### Etapa entregue — M3.5 UX
 
@@ -112,13 +114,14 @@ precisam de validação em uma máquina que consiga abrir o Electron.
 - `electron-updater` está incluído como dependência de runtime. O updater só inicia quando o pacote
   contém `app-update.yml`; verificação de assinatura do instalador Windows continua habilitada.
 - GitHub Actions tem CI Windows (inclui build/testes determinísticos do RubyCLI, typecheck/build e
-  verificação do pacote) e workflow de release em runners Windows, Linux e macOS. A release fica
-  como draft até alguém revisar e publicar manualmente.
-- Linux publica AppImage/deb com feed de atualização. Windows e macOS só geram feed se houver
-  assinatura configurada. Sem certificado, os instaladores ainda são gerados, mas sem auto-update
-  nessas plataformas; Windows pode mostrar alerta de editor desconhecido.
-- O build local deste checkout gerou os três instaladores Windows. Linux/macOS não foram executados
-  neste host e dependem da CI.
+  verificação do pacote) e workflow de release em runners Windows, Linux e macOS. A release
+  `v0.1.0` foi publicada com sucesso; os três builds de plataforma e a coleta dos artefatos passaram.
+- Linux publica AppImage/deb com feed de atualização. Esta release também inclui os metadados
+  `latest*.yml` das três plataformas, mas Windows e macOS estão sem assinatura de código; o
+  funcionamento do auto-update nesses sistemas não deve ser considerado validado. Windows pode
+  mostrar alerta de editor desconhecido.
+- Foram publicados instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS x64/arm64
+  DMG/ZIP. Os builds macOS/Linux passaram na CI, mas não foram executados interativamente neste host.
 
 #### Build e release
 
@@ -132,9 +135,11 @@ npm run package:dir
 ```
 
 No GitHub, configure `RUBYCLI_REPOSITORY` e `RUBYCLI_REF` como Actions variables se a release
-precisar de uma branch/commit específico do engine; o padrão é `marcosvkp/rubycli` em `main`.
-Para release, a tag deve corresponder à versão do `package.json` (por exemplo, `v0.1.0`). O workflow
-envia os instaladores e metadados para um draft; publique-o manualmente após revisar os artefatos.
+precisar de uma branch/commit específico do engine; o padrão é `marcosvkp/rubycli` em `main`. A
+engine deve estar commitada e enviada ao seu próprio repositório antes de iniciar os builds; a CI a
+clona diretamente do GitHub e não espera o npm. A tag deve corresponder à versão do `package.json`
+(por exemplo, `v0.1.0`). O workflow acionado pela tag cria um draft para revisão; `workflow_dispatch`
+com `release_tag` também pode atualizar uma release já publicada e substituir os artefatos.
 
 Segredos opcionais de assinatura: `WIN_CSC_LINK` e `WIN_CSC_KEY_PASSWORD` para Windows;
 `CSC_LINK` e `CSC_KEY_PASSWORD` para macOS. Para notarização macOS, também configure `APPLE_ID`,
@@ -212,11 +217,12 @@ Sem isolamento real de filesystem/rede no Windows. A rede de segurança é o gat
 (modal de permissão) + snapshots do engine. Documentar como limitação conhecida ao usuário
 final.
 
-### 🟢 2.11 macOS e Linux nunca foram executados
+### 🟡 2.11 Runtime macOS e Linux ainda não foi verificado neste host
 
-O código tem os caminhos (`bwrap` no Linux, `sandbox-exec` no macOS, resolução de shell por
-plataforma), mas **nada foi verificado** — o autor não tem Mac e o Linux não foi exercitado.
-Os testes do RubyCLI rodam no Windows. Tratar como "provavelmente funciona", não como "testado".
+Os builds macOS e Linux passaram na CI e os instaladores estão publicados, mas a execução
+interativa e os smoke tests dessas plataformas ainda não foram verificados neste host. O código tem
+caminhos próprios (`bwrap` no Linux, `sandbox-exec` no macOS, resolução de shell por plataforma).
+Tratar empacotamento como verificado e runtime como pendente.
 
 ### 🟢 2.12 O Desktop não tem framework de teste
 
@@ -332,10 +338,10 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 
 ## 6. Ordem sugerida para continuar
 
-1. **Preparar a primeira release M5:** definir a ref do RubyCLI e os segredos de assinatura/notarização;
-   disparar a CI por tag, revisar o draft multiplataforma e publicar manualmente.
-2. **DSL de workflow:** `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` e resultado por schema.
-3. **Auto-continuação de goal:** limite de rodadas, estado `blocked` e recuperação após falha.
-4. **Polimento da UX:** workspaces recentes, múltiplas abas do browser e uma revisão de acessibilidade
+1. **DSL de workflow:** `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` e resultado por schema.
+2. **Auto-continuação de goal:** limite de rodadas, estado `blocked` e recuperação após falha.
+3. **Polimento da UX:** workspaces recentes, múltiplas abas do browser e uma revisão de acessibilidade
    em tamanhos menores. São melhorias separadas da persistência de conversas já entregue.
-5. Corrigir os paths do coverage da configuração Vitest do RubyCLI (§2.13).
+4. Corrigir os paths do coverage da configuração Vitest do RubyCLI (§2.13).
+5. Verificar a execução e os smoke tests da aplicação empacotada em Windows, macOS e Linux; o Electron
+   local interrompe antes do harness com `STATUS_BREAKPOINT`.
