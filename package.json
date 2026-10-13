@@ -1,6 +1,6 @@
 {
   "name": "ruby-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ruby Desktop — app desktop de agentes conectado ao provider Ruby.",
   "author": "RubyCLI",
   "license": "MIT",
@@ -8,7 +8,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "npm run build:engine && electron-vite dev",
-    "build:engine": "vite build --config vite.engine.config.ts && node scripts/copy-skills.mjs",
+    "build:engine": "vite build --config vite.engine.config.ts && node scripts/verify-engine-bundle.cjs out/engine && node scripts/copy-skills.mjs",
     "build": "npm run typecheck && npm run build:engine && electron-vite build",
     "dist": "npm run build && electron-builder --config electron-builder.config.cjs --publish never",
     "package:dir": "npm run build && electron-builder --config electron-builder.config.cjs --dir --publish never",

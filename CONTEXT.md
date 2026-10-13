@@ -333,6 +333,10 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 - **`@rubyclii/cli` resolve por junction npm** (`file:../RubyCLI`). Depois de mudar o engine,
   rodar `npm run build` no RubyCLI — senão o `dist/lib.d.ts` fica velho e o typecheck do
   Desktop quebra com `has no exported member`.
+- **Vite externaliza dependências em builds SSR por padrão.** O engine precisa de
+  `ssr.noExternal: true`; sem isso, o app empacotado pode encerrar com `ERR_MODULE_NOT_FOUND`
+  embora os smokes locais encontrem o pacote no `node_modules` do workspace. O build executa
+  `scripts/verify-engine-bundle.cjs` para impedir imports npm externos.
 
 ### Electron / CDP
 

@@ -83,7 +83,9 @@ Chromium so it could run under any supervisor.
 renderer stay CJS. Vite cannot mix formats in one config, hence
 `vite.engine.config.ts` alongside `electron.vite.config.ts`. The engine config also
 **bundles** its dependencies rather than externalising them, so the shipped app does
-not need `node_modules` for the engine.
+not need `node_modules` for the engine. Vite externalises dependencies in SSR mode by
+default, so keep `ssr.noExternal: true`; `npm run build:engine` runs
+`scripts/verify-engine-bundle.cjs` to catch bare package imports before packaging.
 
 `src/main/browser.ts` and `src/main/browser-service.ts` are separate main entries so
 the smoke tests can `require` the exact implementation the app runs. A copy in the
