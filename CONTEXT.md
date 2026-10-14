@@ -6,25 +6,52 @@
 > Para o _porquê_ das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
-**Estado:** M0–M5 implementados e a release `v0.1.0` publicada com artefatos Windows, macOS e Linux.
-Esta rodada pós-release entrega continuação automática de goals, DSL de workflows, workspaces
-recentes, abas do browser e ajustes de acessibilidade/responsividade. O workflow de release compila
-a engine do repositório próprio no GitHub, sem depender da publicação no npm.
+**Estado:** M0–M6 e as etapas M3.5–M3.7/M4.1–M4.4 estão implementadas. A hardening pass de
+`FIX.md` também foi implementada no Desktop. A próxima etapa planejada é M7 (anexos de imagem e
+geração de imagens). A release `v0.1.3` foi
+publicada com instaladores para Windows, macOS e Linux. A versão inclui verificação de releases do
+GitHub ao iniciar; sem assinatura no Windows/macOS, o app encaminha o usuário ao download manual.
+O workflow compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
 
-### Verificação atual — 2026-10-13
+### Verificação atual — 2026-10-14
+
+- RubyDesktop: `npm run typecheck` e `npm run build` passaram; o bundle engine contém 13 Skills
+  builtin e não deixou imports npm em runtime. Os smokes não foram executados nesta rodada.
+- A CI agora empacota e verifica o diretório instalado em Windows, macOS e Linux; quando o secret
+  `RUBY_API_KEY` existe, executa os seis smoke scripts em cada runner (Linux via Xvfb).
+- A release exige assinatura/notarização de Windows e macOS, valida o feed e seus assets antes de
+  criar/atualizar um draft e recusa alterar uma release publicada. O coletor limpa o staging e só
+  inclui assets da versão atual.
+- `RUBYCLI_REF` agora é obrigatório e deve ser o SHA completo de 40 caracteres do commit RubyCLI;
+  CI e release falham cedo se a variável faltar ou divergir do `ruby-engine.lock.json`.
+- A blocklist catastrófica é aplicada no host Desktop, mas o fix mais abrangente de `FIX-4` ainda
+  depende de o RubyCLI também consultar `matchesNeverAutoApprove` dentro de `decideConfirmation`.
+- O contrato de eventos RubyCLI ainda não traz ids únicos em `tool_call`/`tool_result`; o Desktop
+  continua correlacionando chamadas homônimas por heurística até essa mudança upstream.
+- Smokes determinísticos adicionados à CI: snapshot/diff/apply/cleanup de worktrees, proteção do
+  diff revisado contra alterações posteriores, staging de releases sem assets antigos/feed quebrado,
+  os caminhos de update automático/fallback/instalação e o modo Node stdio do executável empacotado
+  em Windows/macOS/Linux (caminho usado por subprocessos MCP).
+- Falta rodar os seis smokes com provider disponível, validar os instaladores abrindo/instalando em
+  Windows/macOS/Linux (incluindo MCP stdio dentro do pacote) e configurar as Actions
+  variables/secrets antes de usar CI/release.
+
+### Histórico de validação — 2026-10-13
 
 - RubyCLI: build, typecheck, ESLint e Prettier passaram. O teste de sessões teve **43 aprovados e 1
   ignorado**. No Vitest completo, **1159 passaram e 70 foram ignorados**; os 21 casos restantes da
   matriz live receberam `Invalid OpenAI API key` e acionaram a assertion de libuv no Node 24/Windows
   (`3221226505`).
-- RubyDesktop: typecheck e build passaram. Os seis smokes Electron terminaram com `RESULT PASS`,
-  incluindo o novo replay de histórico com cartões de sub-agent e botões Sim/Não restaurados, além
-  de navegação/clique real, abas, permissões, MCP, markdown e auto-goal pela UI. No sandbox restrito,
-  o Electron/build encontra bloqueios de acesso; a execução com acesso ampliado concluiu os smokes
-  com exit code 0.
-- Os paths de `coverage.exclude` do Vitest foram atualizados para os diretórios atuais do RubyCLI.
-- Nenhum commit ou push foi feito nesta rodada. A validação interativa dos instaladores macOS/Linux
-  ainda depende de seus ambientes próprios.
+- RubyDesktop: `npm run build` passou com o verificador de atualizações. Os jobs de release para
+  Windows, Linux e macOS passaram; `v0.1.3` foi publicada com **19 artefatos**.
+- Na validação local desta rodada, `smoke-markdown`, `smoke-session-history` e `smoke-browser`
+  passaram. `smoke-main` recebeu erro HTTP 502 do provider; `smoke-permissions` não concluiu a
+  segunda chamada ao provider e `smoke-mcp` não foi repetido. A suíte completa de smokes havia
+  passado na validação M6 anterior; repetir os fluxos dependentes de provider quando ele estiver
+  disponível.
+- Ainda falta validar os instaladores executando em Windows, macOS e Linux. No Windows/macOS, a
+  instalação automática de updates também depende de certificados de assinatura; sem eles o app
+  oferece abrir a página de downloads.
 
 ### Etapa entregue — M3.5 UX
 
@@ -132,20 +159,21 @@ a engine do repositório próprio no GitHub, sem depender da publicação no npm
 
 - `electron-builder` 26 empacota NSIS x64, arm64 e um instalador combinado que detecta a arquitetura;
   o engine vai em `resources/engine` fora do ASAR para `utilityProcess` abrir um arquivo real.
-- `electron-updater` está incluído como dependência de runtime. Pacotes com `app-update.yml` usam
-  download e instalação automáticos; pacotes sem feed consultam a última release pública no GitHub
-  e oferecem abrir a página de download. A verificação de assinatura do instalador Windows continua
-  habilitada.
-- GitHub Actions tem CI Windows (inclui build/testes determinísticos do RubyCLI, typecheck/build e
-  verificação do pacote) e workflow de release em runners Windows, Linux e macOS. A release
-  `v0.1.0` foi publicada com sucesso; os três builds de plataforma e a coleta dos artefatos passaram.
+- `electron-updater` está incluído como dependência de runtime. Pacotes com feed e assinatura
+  compatíveis usam download e instalação automáticos; builds sem esse caminho consultam a última
+  release pública no GitHub e oferecem abrir a página de download. A verificação de assinatura do
+  instalador Windows continua habilitada.
+- GitHub Actions tem CI e workflow de release em runners Windows, Linux e macOS. A CI compila e
+  verifica o pacote nas três plataformas, além dos testes determinísticos do RubyCLI. A release mais
+  recente, `v0.1.3`, foi publicada; os três builds de plataforma passaram e 19 artefatos foram anexados.
 - Linux publica AppImage/deb com feed de atualização. Esta release também inclui os metadados
   `latest*.yml` das três plataformas. Linux usa o feed automático; Windows e macOS sem assinatura
   verificam releases no GitHub e encaminham para o download manual. O auto-update instalável do
   Windows/macOS depende da configuração de assinatura. Windows pode mostrar alerta de editor
   desconhecido.
-- Foram publicados instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS x64/arm64
-  DMG/ZIP. Os builds macOS/Linux passaram na CI, mas não foram executados interativamente neste host.
+- A release `v0.1.3` contém instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS
+  x64/arm64 DMG/ZIP. Os builds passaram na CI, mas macOS/Linux ainda não foram executados
+  interativamente neste host.
 
 #### Build e release
 
@@ -158,18 +186,40 @@ cd G:\VSCodeProjects\RubyDesktop ; npm run dist
 npm run package:dir
 ```
 
-No GitHub, configure `RUBYCLI_REPOSITORY` e `RUBYCLI_REF` como Actions variables se a release
-precisar de uma branch/commit específico do engine; o padrão é `marcosvkp/rubycli` em `main`. A
-engine deve estar commitada e enviada ao seu próprio repositório antes de iniciar os builds; a CI a
-clona diretamente do GitHub e não espera o npm. A tag deve corresponder à versão do `package.json`
-(por exemplo, `v0.1.0`). O workflow acionado pela tag cria um draft para revisão; `workflow_dispatch`
-com `release_tag` também pode atualizar uma release já publicada e substituir os artefatos.
+No GitHub, configure `RUBYCLI_REF` como Actions variable obrigatória: SHA completo de 40 caracteres
+igual ao commit aprovado em `ruby-engine.lock.json`. `RUBYCLI_REPOSITORY` é opcional e, por padrão,
+a CI clona `marcosvkp/rubycli`. A engine deve estar commitada e enviada ao seu próprio repositório;
+a CI não espera publicação no npm. A tag deve corresponder a `package.json` (por exemplo, `v0.1.3`).
+O workflow por tag cria um draft; `workflow_dispatch` também só atualiza um draft e recusa alterar
+uma release publicada.
 
-Segredos opcionais de assinatura: `WIN_CSC_LINK` e `WIN_CSC_KEY_PASSWORD` para Windows;
-`CSC_LINK` e `CSC_KEY_PASSWORD` para macOS. Para notarização macOS, também configure `APPLE_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Não são necessários para gerar os pacotes; sem
-assinatura, Windows/macOS oferecem a verificação e o download manual da release, sem instalação
-automática.
+O workflow de release exige assinatura Windows (`WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` ou
+`WIN_CSC_NAME`) e assinatura/notarização macOS (`MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`). Configure `RUBY_API_KEY` para os smokes que chamam
+o provider. Builds locais sem publicação continuam possíveis sem certificados.
+
+### M7 planejado — Anexos e geração de imagens (não implementado)
+
+O composer atual envia texto. O indicador `supportsVision` do catálogo só descreve capacidade do
+modelo; ele não significa que o Desktop envie imagens. A tool `browser_screenshot` salva PNG na
+pasta de dados do app e retorna texto, sem anexar a imagem à conversa.
+
+- **M7.1 — Anexos de entrada:** escolher imagem, colar da área de transferência ou arrastar e soltar;
+  mostrar prévia e permitir remoção antes do envio. Validar MIME e tamanho no processo principal e
+  transportar bytes/referências pelo IPC sem dar acesso geral ao filesystem ao renderer.
+- **M7.2 — Visão no chat:** enviar texto e imagens no mesmo turno por um payload multimodal real do
+  engine; explicar ou impedir o envio quando o modelo escolhido não aceitar imagens. Persistir
+  referências dos anexos na sessão e restaurá-las ao reabrir, sem gravar base64 no JSONL.
+- **M7.3 — Tool de geração:** criar uma tool do agente que use a chave Ruby já configurada e permita
+  escolher explicitamente um modelo de geração. Separar entrada visual (`supportsVision`) de geração:
+  conferir catálogo, endpoint, autenticação e limites do provider antes de expor a tool. Mostrar o
+  resultado como anexo no chat, persistir a referência e oferecer salvar/exportar.
+- **M7.4 — Verificação:** cobrir validação de anexos, roteamento para modelos compatíveis, persistência
+  e restauração, erros de provider e geração nos testes determinísticos.
+
+**Decisões técnicas pendentes:** formatos e limite de tamanho dos anexos; quantidade de imagens por
+turno; modelos/endpoints de geração disponíveis no catálogo Ruby; pasta de saída e aprovação antes
+de gravar imagens no workspace.
 
 ---
 
@@ -211,6 +261,8 @@ completo de gramática; Shiki continua sendo uma opção se a fidelidade de sint
 
 A union do engine ainda não tem `usage`, `approval_request`, `approval_resolved`, `turn_start`,
 `goal_updated`, `compact_start`/`done`, `subagent_*`, `mcp_status`.
+Ela também não inclui um id em `tool_call` e `tool_result`; o Desktop ainda associa resultados por
+nome e ordem, portanto duas chamadas simultâneas da mesma ferramenta podem ser ambíguas.
 
 **Não bloqueia**: o Desktop contorna com mensagens de IPC próprias (`approvalRequest`,
 `approvalResult`, `metric`, `goal`, `mcp`, `browserState`). A desvantagem é que o engine deixa
@@ -311,8 +363,10 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 
 | Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e Windows/macOS não recebem feed de atualização | Configurar os segredos antes de publicar uma release distribuível                   |
-| **Ref do RubyCLI na CI**          | Desktop usa `file:../RubyCLI`; CI clona um checkout irmão para compilar o engine                | Fixar `RUBYCLI_REF` numa branch/commit que contenha as mudanças de engine desejadas |
+| **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
+| **Ref do RubyCLI na CI**          | Desktop usa `file:../RubyCLI`; CI clona um checkout irmão para compilar o engine                | Configurar `RUBYCLI_REF` como SHA completo de 40 caracteres compatível com `ruby-engine.lock.json` |
+| **IDs dos eventos de ferramenta** | `AgentEvent` do RubyCLI não fornece id de correlação para `tool_call`/`tool_result`              | Adicionar ids no RubyCLI; até lá o Desktop associa chamadas simultâneas por nome e ordem |
+| **CI/release**                    | Os workflows estão preparados, mas dependem de Actions variables/secrets do repositório        | Configurar `RUBYCLI_REF`, chave de smoke e certificados/credenciais de assinatura |
 
 ---
 
@@ -364,9 +418,14 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 
 ## 6. Ordem sugerida para continuar
 
-1. Executar `npm run eval` quando houver uma chave válida para o provider configurado; investigar a
-   assertion nativa do Node se ela continuar após a autenticação funcionar.
-2. Validar os instaladores empacotados em Windows, macOS e Linux. Os smokes do checkout passaram no
-   Windows quando executados com acesso ampliado ao filesystem/processos.
-3. Considerar testes unitários para reducers e componentes do renderer se o volume de UI continuar
+1. Executar `npm run eval` e os smokes que dependem do provider quando houver uma chave válida e o
+   serviço estiver respondendo; investigar a assertion nativa do Node se continuar após autenticar.
+2. Iniciar M7 com uma verificação técnica do catálogo Ruby, endpoint de geração e contrato multimodal
+   do engine; depois implementar anexos de imagem e a tool de geração.
+3. Validar os instaladores empacotados em Windows, macOS e Linux. Windows é o teste local disponível;
+   macOS/Linux dependem de máquinas desses sistemas.
+4. Configurar certificados Windows/macOS caso se queira reduzir alertas do instalador e habilitar
+   instalação automática nessas plataformas; a verificação com link para downloads já funciona sem
+   assinatura.
+5. Considerar testes unitários para reducers e componentes do renderer se o volume de UI continuar
    crescendo; hoje o Desktop usa os seis smokes Electron.

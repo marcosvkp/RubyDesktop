@@ -27,15 +27,20 @@ export default defineConfig({
     target: "node20",
     ssr: true,
     minify: false,
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: {
-      input: resolve(__dirname, "src/engine-host/index.ts"),
+      input: {
+        index: resolve(__dirname, "src/engine-host/index.ts"),
+        // Separate entry lets the deterministic smoke exercise real git behavior
+        // without booting the provider-backed agent.
+        worktrees: resolve(__dirname, "src/engine-host/worktrees.ts"),
+      },
       // `electron` is the only thing that must stay external: it is provided by
       // the host process, not resolved from disk.
       external: ["electron"],
       output: {
         format: "es",
-        entryFileNames: "index.mjs",
+        entryFileNames: "[name].mjs",
       },
     },
   },

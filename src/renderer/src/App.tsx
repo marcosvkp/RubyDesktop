@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChatErrorBoundary } from "./components/ChatErrorBoundary";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
@@ -17,6 +18,7 @@ export function App(): React.JSX.Element {
   const dismissFatal = useStore((s) => s.dismissFatal);
   const workspace = useStore((s) => s.workspace);
   const browserOpen = useStore((s) => s.browser.open);
+  const approvalOpen = useStore((s) => Boolean(s.approval));
   const [showOutput, setShowOutput] = useState(false);
   const [showMcp, setShowMcp] = useState(false);
   // The panel starts hidden; it is revealed when the agent opens the browser, or
@@ -47,7 +49,13 @@ export function App(): React.JSX.Element {
     }
   }, [browserOpen]);
 
-  const closeBrowserPanel = (): void => {
+  const hideBrowserPanel = (): void => {
+    setShowBrowser(false);
+    window.ruby.setBrowserBounds({ x: 0, y: 0, width: 0, height: 0 });
+  };
+
+  const closeBrowser = (): void => {
+    if (useStore.getState().busy && !window.confirm("O agente está usando o navegador. Fechar a página interrompe esse trabalho. Deseja continuar?")) return;
     setShowBrowser(false);
     window.ruby.closeBrowser();
   };
@@ -67,6 +75,7 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
+      <div inert={approvalOpen} aria-hidden={approvalOpen || undefined} className="flex min-h-0 flex-1 flex-col">
       <TitleBar onOpenSettings={() => setShowSettings(true)} />
       <div className="flex min-h-0 min-w-0 flex-1">
         <Sidebar
@@ -78,10 +87,11 @@ export function App(): React.JSX.Element {
           }}
           mcpOpen={showMcp}
           onToggleBrowser={() => {
-            if (showBrowser) closeBrowserPanel();
+            if (showBrowser) hideBrowserPanel();
             else {
               setShowMcp(false);
-              window.ruby.openBrowser();
+              setShowBrowser(true);
+              if (!browserOpen) window.ruby.openBrowser();
             }
           }}
           browserOpen={showBrowser}
@@ -92,16 +102,19 @@ export function App(): React.JSX.Element {
           ) : null}
           <GoalBanner />
           {!showBrowser ? (
-            <BrowserHiddenNotice onShow={() => setShowBrowser(true)} />
+            <BrowserHiddenNotice onShow={() => {
+              setShowBrowser(true);
+              window.ruby.openBrowser();
+            }} />
           ) : null}
-          <ChatView />
+          <ChatErrorBoundary><ChatView /></ChatErrorBoundary>
           {showOutput ? (
             <OutputPanel onClose={() => setShowOutput(false)} />
           ) : null}
           <Composer />
         </main>
         {showMcp ? <McpPanel onClose={() => setShowMcp(false)} /> : null}
-        {showBrowser ? <BrowserPanel onClose={closeBrowserPanel} /> : null}
+        {showBrowser ? <BrowserPanel onClose={hideBrowserPanel} onCloseBrowser={closeBrowser} /> : null}
         {showSettings ? (
           <SettingsModal onClose={() => setShowSettings(false)} />
         ) : null}
@@ -110,6 +123,7 @@ export function App(): React.JSX.Element {
         outputOpen={showOutput}
         onToggleOutput={() => setShowOutput((v) => !v)}
       />
+      </div>
       {/* Last in the tree so it paints above everything and captures the keyboard. */}
       <ApprovalModal />
     </div>

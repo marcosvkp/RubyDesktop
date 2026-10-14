@@ -8,14 +8,18 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "npm run build:engine && electron-vite dev",
-    "build:engine": "vite build --config vite.engine.config.ts && node scripts/verify-engine-bundle.cjs out/engine && node scripts/copy-skills.mjs",
+    "build:engine": "vite build --config vite.engine.config.ts && node scripts/copy-skills.mjs && node scripts/verify-engine-bundle.cjs out/engine",
     "build": "npm run typecheck && npm run build:engine && electron-vite build",
     "dist": "npm run build && electron-builder --config electron-builder.config.cjs --publish never",
     "package:dir": "npm run build && electron-builder --config electron-builder.config.cjs --dir --publish never",
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "smoke:worktrees": "node scripts/smoke-worktrees.cjs",
+    "smoke:release-assets": "node scripts/smoke-release-assets.cjs",
+    "smoke:updater": "node scripts/smoke-updater.cjs",
+    "smoke:packaged-mcp": "node scripts/smoke-packaged-mcp.cjs release"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",

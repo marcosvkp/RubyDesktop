@@ -32,7 +32,8 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
           ? "negado"
           : "falhou";
 
-  const args = formatArgs(item.args);
+  const args = formatArgs(item.args, 120);
+  const expandedArgs = formatArgs(item.args, 16_000);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -66,7 +67,7 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
         <div className="border-t border-line">
           {args ? (
             <pre className="overflow-x-auto border-b border-line px-3 py-2 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-              {args}
+              {expandedArgs}
             </pre>
           ) : null}
           {item.result ? (
@@ -83,17 +84,20 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
 }
 
 /** Renders tool arguments as a single compact line. */
-function formatArgs(args: unknown): string {
+function formatArgs(args: unknown, maxValueChars: number): string {
   if (args === null || args === undefined) return "";
-  if (typeof args === "string") return args;
-  if (typeof args !== "object") return String(args);
+  const clip = (value: string): string => value.length > maxValueChars
+    ? `${value.slice(0, maxValueChars)}… (${value.length - maxValueChars} caracteres omitidos)`
+    : value;
+  if (typeof args === "string") return clip(args);
+  if (typeof args !== "object") return clip(String(args));
   const entries = Object.entries(args as Record<string, unknown>);
   if (entries.length === 0) return "";
   return entries
     .map(([key, value]) => {
       const rendered =
         typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
-      const clipped = rendered.length > 120 ? `${rendered.slice(0, 120)}…` : rendered;
+      const clipped = clip(rendered);
       return `${key}: ${clipped}`;
     })
     .join("  ");

@@ -9,27 +9,48 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  windows:
-    runs-on: windows-latest
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+          - platform: linux
+            runner: ubuntu-latest
+          - platform: macos
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           path: RubyDesktop
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ vars.RUBYCLI_REPOSITORY || 'marcosvkp/rubycli' }}
-          ref: ${{ vars.RUBYCLI_REF || 'main' }}
+          ref: ${{ vars.RUBYCLI_REF }}
           path: RubyCLI
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: |
             RubyDesktop/package-lock.json
             RubyCLI/package-lock.json
+
+      - name: Validate pinned RubyCLI checkout
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        env:
+          RUBYCLI_REF: ${{ vars.RUBYCLI_REF }}
+        run: node scripts/verify-engine-pin.cjs ../RubyCLI
 
       - name: Install and build RubyCLI
         working-directory: ${{ github.workspace }}/RubyCLI
@@ -53,12 +74,85 @@ jobs:
           npm ci
           npm run build
 
-      - name: Package Windows directory
+      - name: Smoke isolated worktrees
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: npm run smoke:worktrees
+
+      - name: Smoke release asset staging
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: npm run smoke:release-assets
+
+      - name: Smoke updater and GitHub fallbacks
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: npm run smoke:updater
+
+      - name: Package application directory
         working-directory: ${{ github.workspace }}/RubyDesktop
         run: npm run package:dir
 
       - name: Verify packaged application
         working-directory: ${{ github.workspace }}/RubyDesktop
+        run: node scripts/verify-package.cjs release
+
+      - name: Smoke packaged MCP stdio runtime
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: npm run smoke:packaged-mcp
+
+      - name: Check provider smoke availability
+        id: provider-key
+        shell: pwsh
+        env:
+          RUBY_API_KEY: ${{ secrets.RUBY_API_KEY }}
         run: |
-          node scripts/verify-package.cjs release/win-unpacked
-          node scripts/verify-package.cjs release/win-arm64-unpacked
+          if ([string]::IsNullOrWhiteSpace($env:RUBY_API_KEY)) {
+            "available=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "available=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Smoke suite (Windows)
+        if: ${{ steps.provider-key.outputs.available == 'true' && matrix.platform == 'windows' }}
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        env:
+          RUBY_API_KEY: ${{ secrets.RUBY_API_KEY }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+          $smokes = @(
+            'smoke-main.cjs',
+            'smoke-permissions.cjs',
+            'smoke-mcp.cjs',
+            'smoke-browser.cjs',
+            'smoke-markdown.cjs',
+            'smoke-session-history.cjs'
+          )
+          foreach ($smoke in $smokes) {
+            & .\node_modules\electron\dist\electron.exe "scripts/$smoke"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Smoke suite (macOS)
+        if: ${{ steps.provider-key.outputs.available == 'true' && matrix.platform == 'macos' }}
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        env:
+          RUBY_API_KEY: ${{ secrets.RUBY_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ELECTRON_RUN_AS_NODE || true
+          for smoke in smoke-main smoke-permissions smoke-mcp smoke-browser smoke-markdown smoke-session-history; do
+            ./node_modules/.bin/electron "scripts/${smoke}.cjs"
+          done
+
+      - name: Smoke suite (Linux)
+        if: ${{ steps.provider-key.outputs.available == 'true' && matrix.platform == 'linux' }}
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        env:
+          RUBY_API_KEY: ${{ secrets.RUBY_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ELECTRON_RUN_AS_NODE || true
+          for smoke in smoke-main smoke-permissions smoke-mcp smoke-browser smoke-markdown smoke-session-history; do
+            xvfb-run -a ./node_modules/.bin/electron "scripts/${smoke}.cjs"
+          done

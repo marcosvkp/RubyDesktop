@@ -20,6 +20,8 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelado",
   interrupted: "Interrompido ao fechar o app",
 };
+const ROLE_LABEL: Record<string, string> = { explorer: "Pesquisa", worker: "Implementação" };
+const EFFORT_LABEL: Record<string, string> = { low: "baixo", medium: "médio", high: "alto" };
 
 export function SubAgentCard({
   item,
@@ -56,7 +58,7 @@ export function SubAgentCard({
               {agent.title}
             </h3>
             <span className="rounded-full border border-line px-2 py-0.5 text-[10px] capitalize text-muted-foreground">
-              {agent.role}
+              {ROLE_LABEL[agent.role] ?? agent.role}
             </span>
             <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
               <Icon className={`h-3 w-3 ${active ? "animate-spin" : ""}`} />
@@ -65,7 +67,7 @@ export function SubAgentCard({
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {agent.model}
-            {agent.reasoningEffort ? ` · ${agent.reasoningEffort}` : ""}
+            {agent.reasoningEffort ? ` · raciocínio ${EFFORT_LABEL[agent.reasoningEffort] ?? agent.reasoningEffort}` : ""}
           </p>
           {agent.instructions ? (
             <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">

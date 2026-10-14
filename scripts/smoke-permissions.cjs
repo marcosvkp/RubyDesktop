@@ -26,6 +26,7 @@
 const { runScenario } = require("./smoke-harness.cjs");
 const fs = require("node:fs");
 const path = require("node:path");
+const { approvalGrantScope, confirmationDecision } = require("../out/main/approval-policy.js");
 
 // A unique target per run: the command must be mutating (so the gate opens) and
 // must not collide with a previous run (so a re-run still proves execution).
@@ -66,6 +67,11 @@ runScenario({
   timeoutMs: Number(process.env.SMOKE_TIMEOUT_MS || 300_000),
   hooks: {
     async onReady(ready, api) {
+      try {
+        await assertPermissionPolicy();
+      } catch (err) {
+        return api.finish(1, `permission policy checks failed: ${err.stack || err}`);
+      }
       if (ready.permissionMode !== "normal") {
         return api.finish(
           1,
@@ -359,4 +365,65 @@ runScenario({
       }
     },
   },
+});
+
+/** Pure policy regression checks; no dangerous command is ever executed here. */
+async function assertPermissionPolicy() {
+  const {
+    buildPermissionSources,
+    decideConfirmation,
+    matchesNeverAutoApprove,
+  } = await import("@rubyclii/cli");
+
+  const repositorySettings = {
+    permissions: {
+      allow: ["bash:*"],
+      ask: ["write:*"],
+      deny: ["edit:*"],
+    },
+  };
+  const sources = buildPermissionSources({}, repositorySettings, {});
+  if (sources.globalAllowSet.size !== 0 || sources.projectAllowSet.size !== 0) {
+    throw new Error("repository-shipped allow rules became trusted grants");
+  }
+  if (!sources.askPatterns.includes("write:*") || !sources.denyPatterns.includes("edit:*")) {
+    throw new Error("safe restrictive repository rules were not retained");
+  }
+  const repoGrantDecision = decideConfirmation(
+    new Set([...sources.globalAllowSet, ...sources.projectAllowSet]),
+    sources.denyPatterns,
+    "bash",
+    { command: "mkdir harmless-smoke-directory" },
+    true,
+  );
+  if (repoGrantDecision !== "ask") {
+    throw new Error(`repository allow unexpectedly skipped confirmation (${repoGrantDecision})`);
+  }
+
+  const dangerous = { command: "rm -rf /" };
+  if (!matchesNeverAutoApprove("bash", dangerous)) {
+    throw new Error("catastrophic command was not recognized by the approval blocklist");
+  }
+  const dangerousDecision = confirmationDecision(
+    true,
+    decideConfirmation(new Set(["bash:*"]), [], "bash", dangerous, true),
+  );
+  if (dangerousDecision !== "ask") {
+    throw new Error("a global bash grant bypassed the catastrophic approval prompt");
+  }
+  if (approvalGrantScope("allow", "global", true) !== "once") {
+    throw new Error("a hand-approved catastrophic command could persist a grant");
+  }
+  console.log("[perm] policy verified: repository grants ignored; dangerous grant prompts and remains one-time");
+}
+
+// The test creates unique throwaway paths; clean them even when a smoke phase fails.
+process.on("exit", () => {
+  for (const target of [ALLOW_DIR, DENY_DIR]) {
+    try {
+      fs.rmSync(path.join(WORKSPACE, target), { recursive: true, force: true });
+    } catch {
+      /* The run may not have created it or the workspace may already be unavailable. */
+    }
+  }
 });

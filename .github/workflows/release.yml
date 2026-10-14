@@ -6,12 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing tag to rebuild and update, such as v0.1.0
+        description: Existing tag to rebuild into a draft release, such as v0.1.0
         required: true
         type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: desktop-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -26,9 +30,12 @@ jobs:
           - platform: macos
             runner: macos-latest
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     env:
       RUBY_DESKTOP_GITHUB_REPOSITORY: ${{ github.repository }}
       RUBY_DESKTOP_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      RUBY_DESKTOP_REQUIRE_SIGNING: ${{ matrix.platform != 'linux' }}
+      RUBY_DESKTOP_UPDATES_ENABLED: "true"
       CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
       CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
       APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
@@ -36,18 +43,20 @@ jobs:
       APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
       WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK || '' }}
       WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+      WIN_CSC_NAME: ${{ matrix.platform == 'windows' && vars.WIN_CSC_NAME || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           path: RubyDesktop
+          ref: ${{ inputs.release_tag || github.ref }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ vars.RUBYCLI_REPOSITORY || 'marcosvkp/rubycli' }}
-          ref: ${{ vars.RUBYCLI_REF || 'main' }}
+          ref: ${{ vars.RUBYCLI_REF }}
           path: RubyCLI
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -55,10 +64,13 @@ jobs:
             RubyDesktop/package-lock.json
             RubyCLI/package-lock.json
 
-      - name: Validate release tag
+      - name: Validate pinned RubyCLI checkout and release tag
         shell: bash
         working-directory: ${{ github.workspace }}/RubyDesktop
+        env:
+          RUBYCLI_REF: ${{ vars.RUBYCLI_REF }}
         run: |
+          node scripts/verify-engine-pin.cjs ../RubyCLI
           expected="v$(node -p "require('./package.json').version")"
           if [ "$RUBY_DESKTOP_RELEASE_TAG" != "$expected" ]; then
             echo "Tag $RUBY_DESKTOP_RELEASE_TAG does not match package version $expected" >&2
@@ -77,11 +89,40 @@ jobs:
           npm ci
           npm run dist
 
+      - name: Verify packaged application
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        run: node scripts/verify-package.cjs release
+
+      - name: Verify Windows signatures
+        if: matrix.platform == 'windows'
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem release -Filter '*.exe' -File
+          if ($installers.Count -eq 0) { throw 'No Windows installer was produced.' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature on $($installer.Name): $($signature.Status)" }
+          }
+
+      - name: Verify macOS signature and notarization
+        if: matrix.platform == 'macos'
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        shell: bash
+        run: |
+          mapfile -d '' apps < <(find release -type d -name '*.app' -print0)
+          if [ "${#apps[@]}" -eq 0 ]; then echo "No macOS app bundle was produced." >&2; exit 1; fi
+          for app in "${apps[@]}"; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose "$app"
+            xcrun stapler validate "$app"
+          done
+
       - name: Collect installers and update metadata
         working-directory: ${{ github.workspace }}/RubyDesktop
         run: node scripts/collect-release-assets.cjs release "${{ matrix.platform }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ruby-release-${{ matrix.platform }}
           path: ${{ github.workspace }}/RubyDesktop/release/release-assets/*
@@ -91,8 +132,9 @@ jobs:
   draft-release:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: ruby-release-*
           path: release-assets
@@ -107,7 +149,7 @@ jobs:
           tag="$RUBY_DESKTOP_RELEASE_TAG"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
-            if [ "$is_draft" != "true" ] && [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            if [ "$is_draft" != "true" ]; then
               echo "Release $tag is already published; refusing to replace its assets." >&2
               exit 1
             fi

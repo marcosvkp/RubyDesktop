@@ -58,7 +58,7 @@ export function OutputPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
             Ainda sem atividade. As chamadas do modelo e das ferramentas aparecerão aqui.
           </p>
         ) : (
-          metrics.map((line, index) => <MetricRow key={index} line={line} />)
+          metrics.map((line) => <MetricRow key={line.id} line={line} />)
         )}
         <div ref={endRef} />
       </div>

@@ -103,9 +103,9 @@ export function SubAgentConfigCard({
                 </p>
               </div>
               <div>
-                <span className="text-muted-foreground">Reasoning effort</span>
+                <span className="text-muted-foreground">Nível de raciocínio</span>
                 <p className="mt-0.5 font-medium text-foreground">
-                  {displayedEffort || "Padrão do modelo"}
+                  {displayedEffort ? effortLabel(displayedEffort) : "Padrão do modelo"}
                 </p>
               </div>
             </div>
@@ -183,7 +183,7 @@ export function SubAgentConfigCard({
                 </select>
               </label>
               <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Reasoning effort
+                Nível de raciocínio
                 <select
                   value={displayedEffort}
                   disabled={!pending || efforts.length === 0}
@@ -195,7 +195,7 @@ export function SubAgentConfigCard({
                   <option value="">Padrão do modelo</option>
                   {efforts.map((entry) => (
                     <option key={entry} value={entry}>
-                      {entry}
+                      {effortLabel(entry)}
                     </option>
                   ))}
                 </select>
@@ -263,4 +263,8 @@ export function SubAgentConfigCard({
       </div>
     </section>
   );
+}
+
+function effortLabel(effort: string): string {
+  return ({ low: "Baixo", medium: "Médio", high: "Alto" } as Record<string, string>)[effort] ?? effort;
 }

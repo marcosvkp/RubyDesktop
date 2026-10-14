@@ -8,6 +8,7 @@ const windowsSigningConfigured = Boolean(
   process.env.WIN_CSC_LINK || process.env.WIN_CSC_NAME || process.env.CSC_LINK || process.env.CSC_NAME,
 );
 const macSigningConfigured = Boolean(process.env.CSC_LINK || process.env.CSC_NAME);
+const requireSigning = process.env.RUBY_DESKTOP_REQUIRE_SIGNING === "true";
 const autoUpdatesCanBePublished = process.platform === "win32"
   ? windowsSigningConfigured
   : process.platform === "darwin"
@@ -33,8 +34,7 @@ module.exports = {
     },
   ],
   asar: true,
-  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
-  electronUpdaterCompatibility: ">= 2.16",
+  artifactName: "${name}-${version}-${os}-${arch}.${ext}",
   ...(publish ? { publish } : {}),
   win: {
     icon: "design/ruby-favicon.ico",
@@ -42,6 +42,7 @@ module.exports = {
     // Keep publisher verification enabled. The update feed is omitted until a
     // Windows signing certificate is configured.
     verifyUpdateCodeSignature: true,
+    forceCodeSigning: requireSigning,
   },
   nsis: {
     oneClick: false,
@@ -57,6 +58,10 @@ module.exports = {
     icon: "design/brand/ruby-mark.png",
     // Public builds remain unsigned until a Developer ID certificate is configured.
     ...(macSigningConfigured ? {} : { identity: null }),
+    forceCodeSigning: requireSigning,
+    notarize: requireSigning,
+    entitlements: "design/entitlements.mac.plist",
+    entitlementsInherit: "design/entitlements.mac.plist",
     target: [
       { target: "dmg", arch: ["x64", "arm64"] },
       { target: "zip", arch: ["x64", "arm64"] },
@@ -65,7 +70,7 @@ module.exports = {
   linux: {
     icon: "design/brand/ruby-mark.png",
     category: "Development",
-    maintainer: "RubyCLI",
+    maintainer: "RubyCLI <dev@rubycli.cloud>",
     target: [
       { target: "AppImage", arch: ["x64"] },
       { target: "deb", arch: ["x64"] },

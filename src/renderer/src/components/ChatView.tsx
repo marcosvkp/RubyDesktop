@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Info } from "lucide-react";
 import { useStore, type ChatItem } from "../store";
 import { ToolCallCard } from "./ToolCallCard";
@@ -18,12 +18,14 @@ export function ChatView(): React.JSX.Element {
 
   // Follow streamed output only while the reader has not scrolled away from it.
   useEffect(() => {
+    let frame = 0;
     if (pinnedRef.current) {
-      bottomRef.current?.scrollIntoView({ block: "end" });
+      frame = requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: "end" }));
       setShowJumpToLatest(false);
     } else {
       setShowJumpToLatest(true);
     }
+    return () => cancelAnimationFrame(frame);
   }, [items]);
 
   const updateScrollPosition = (): void => {
@@ -72,7 +74,7 @@ export function ChatView(): React.JSX.Element {
   );
 }
 
-function Item({ item }: { item: ChatItem }): React.JSX.Element {
+const Item = memo(function Item({ item }: { item: ChatItem }): React.JSX.Element {
   switch (item.kind) {
     case "user":
       return (
@@ -124,11 +126,18 @@ function Item({ item }: { item: ChatItem }): React.JSX.Element {
     case "subagent":
       return <SubAgentCard item={item} />;
   }
-}
+});
 
 function EmptyState({ status }: { status: string }): React.JSX.Element {
-  const label =
-    status === "ready" ? "Pronto" : status === "busy" ? "Trabalhando" : status;
+  const label = status === "ready"
+    ? "Pronto"
+    : status === "busy"
+      ? "Trabalhando"
+      : status === "starting"
+        ? "Iniciando"
+        : status === "error"
+          ? "Erro"
+          : "Parado";
   return (
     <div className="flex flex-col items-center gap-3 py-20 text-center">
       <div className="eyebrow">{label}</div>

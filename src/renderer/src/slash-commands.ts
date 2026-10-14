@@ -35,6 +35,17 @@ const commands: SlashSuggestion[] = [
   },
 ];
 
+/** Command recognition and autocomplete use the same list of valid commands. */
+export function isKnownSlashCommand(text: string, skills: SkillSummary[]): boolean {
+  if (!text.startsWith("/")) return false;
+  const name = text.slice(1).trimStart().split(/\s+/, 1)[0]?.toLowerCase();
+  if (!name) return false;
+  return (
+    commands.some((command) => command.value.slice(1) === name) ||
+    skills.some((skill) => skill.name.toLowerCase() === name)
+  );
+}
+
 const goalActions: SlashSuggestion[] = [
   {
     value: "/goal note",

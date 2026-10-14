@@ -33,6 +33,7 @@ import type {
   UserQuestionAnswer,
   UserQuestionRequest,
 } from "@shared/ipc";
+import { isKnownSlashCommand } from "./slash-commands";
 
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
@@ -40,6 +41,7 @@ export type ChatItem =
   | {
       kind: "tool";
       id: string;
+      callId?: string;
       name: string;
       args: unknown;
       result?: string;
@@ -79,6 +81,8 @@ export interface SessionUsageStats {
   generationTimeMs: number;
   toolTimeMs: number;
 }
+
+type MetricEntry = MetricLine & { id: string };
 
 export function emptySessionUsageStats(): SessionUsageStats {
   return {
@@ -146,6 +150,8 @@ interface State {
   model: string;
   status: EngineStatus;
   items: ChatItem[];
+  turnCount: number;
+  stepCount: number;
   sessions: SessionSummary[];
   currentSessionId?: string;
   busy: boolean;
@@ -166,7 +172,7 @@ interface State {
   /** The result of the last "test connection", keyed by nothing — it is a one-off. */
   mcpTest?: McpServerSummary;
   /** Output-panel lines, newest last. Capped so a long session cannot grow forever. */
-  metrics: MetricLine[];
+  metrics: MetricEntry[];
   /** Aggregate telemetry for the active conversation; independent of the capped activity log. */
   sessionUsage: SessionUsageStats;
   /** Whether the embedded browser view is mounted, and what it is showing. */
@@ -230,6 +236,7 @@ interface State {
 }
 
 let counter = 0;
+let metricCounter = 0;
 const nextId = (): string => `i${++counter}`;
 
 /**
@@ -253,6 +260,24 @@ function closeStreaming(items: ChatItem[]): ChatItem[] {
       ? { ...item, streaming: false }
       : item,
   );
+}
+
+const MAX_TOOL_RESULT_CHARS = 32_000;
+
+function truncateToolResult(result: string): string {
+  if (result.length <= MAX_TOOL_RESULT_CHARS) return result;
+  const omitted = result.length - MAX_TOOL_RESULT_CHARS;
+  return `${result.slice(0, MAX_TOOL_RESULT_CHARS)}\n\n[… resultado truncado; ${omitted.toLocaleString("pt-BR")} caracteres omitidos para reduzir o uso de memória …]`;
+}
+
+function countChatItems(items: ChatItem[]): { turnCount: number; stepCount: number } {
+  let turnCount = 0;
+  let stepCount = 0;
+  for (const item of items) {
+    if (item.kind === "user" && !item.text.trimStart().startsWith("/")) turnCount++;
+    else if (item.kind === "tool") stepCount++;
+  }
+  return { turnCount, stepCount };
 }
 
 /** Appends an informational or error notice. */
@@ -319,6 +344,7 @@ function isSubAgentConfigRequest(
 
 interface RestoredToolCall {
   id: string;
+  callId?: string;
   name: string;
   args: unknown;
   hasUiAnnotation: boolean;
@@ -503,6 +529,7 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
       const calls = toolCallsByName.get(entry.name) ?? [];
       calls.push({
         id,
+        callId: entry.id,
         name: entry.name,
         args: entry.args,
         hasUiAnnotation: false,
@@ -511,13 +538,19 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
       items.push({
         kind: "tool",
         id,
+        callId: entry.id,
         name: entry.name,
         args: entry.args,
         status: "running",
       });
     } else if (entry.type === "tool_result") {
       const calls = toolCallsByName.get(entry.name);
-      const call = calls?.shift();
+      const callIndex = entry.id
+        ? (calls?.findIndex((candidate) => candidate.callId === entry.id) ?? -1)
+        : calls?.length
+          ? 0
+          : -1;
+      const call = callIndex >= 0 ? calls?.splice(callIndex, 1)[0] : undefined;
       const index = call
         ? items.findIndex((item) => item.kind === "tool" && item.id === call.id)
         : -1;
@@ -525,7 +558,7 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
       if (index >= 0 && item?.kind === "tool") {
         items[index] = {
           ...item,
-          result: entry.result,
+          result: truncateToolResult(entry.result),
           status: entry.result.startsWith("Blocked:")
             ? "denied"
             : entry.result.startsWith("Error:")
@@ -673,7 +706,6 @@ function runSlashCommand(text: string, get: () => State): boolean {
       state.pushNotice(
         [
           "Comandos:",
-          "Use /new-skill para criar uma Skill personalizada.",
           `Skills disponíveis: ${state.skills.map((skill) => `/${skill.name}`).join(", ") || "nenhuma"}`,
           "/goal <texto> — define a meta do workspace; sem argumento, mostra a meta atual",
           "/goal note <texto> — adiciona uma nota de progresso",
@@ -738,18 +770,34 @@ function runSlashCommand(text: string, get: () => State): boolean {
         return true;
       }
       if (sub === "pause") {
+        if (rest.length > 1) {
+          state.pushNotice("Uso: /goal pause", "error");
+          return true;
+        }
         state.setGoalStatus("paused");
         return true;
       }
       if (sub === "resume") {
+        if (rest.length > 1) {
+          state.pushNotice("Uso: /goal resume", "error");
+          return true;
+        }
         state.setGoalStatus("active");
         return true;
       }
       if (sub === "done" || sub === "complete") {
+        if (rest.length > 1) {
+          state.pushNotice("Uso: /goal done", "error");
+          return true;
+        }
         state.setGoalStatus("complete");
         return true;
       }
       if (sub === "clear") {
+        if (rest.length > 1) {
+          state.pushNotice("Uso: /goal clear", "error");
+          return true;
+        }
         state.clearGoal();
         return true;
       }
@@ -807,6 +855,8 @@ export const useStore = create<State>((set, get) => ({
   model: "",
   status: "starting",
   items: [],
+  turnCount: 0,
+  stepCount: 0,
   sessions: [],
   busy: false,
   contextWindow: 0,
@@ -848,6 +898,8 @@ export const useStore = create<State>((set, get) => ({
                   [],
                   `Workspace alterado para ${message.workspace}`,
                 ),
+                turnCount: 0,
+                stepCount: 0,
                 sessions: [],
                 currentSessionId: undefined,
                 contextUsed: 0,
@@ -875,19 +927,25 @@ export const useStore = create<State>((set, get) => ({
         }));
         return;
 
-      case "sessions":
+      case "sessions": {
+        const transcriptItems = message.transcript !== undefined
+          ? restoreTranscript(message.transcript)
+          : undefined;
         set({
           sessions: message.sessions,
           currentSessionId: message.currentSessionId,
-          ...(message.transcript !== undefined
+          ...(transcriptItems !== undefined
             ? {
-                items: restoreTranscript(message.transcript),
+                items: transcriptItems,
+                ...countChatItems(transcriptItems),
+                contextUsed: 0,
                 metrics: [],
                 sessionUsage: emptySessionUsageStats(),
               }
             : {}),
         });
         return;
+      }
 
       case "status":
         set({ status: message.status, busy: message.status === "busy" });
@@ -940,7 +998,7 @@ export const useStore = create<State>((set, get) => ({
         set((s) => ({
           // Bounded: this is a live activity log, not a record. Keeping every line
           // of a long session would grow without limit for no benefit.
-          metrics: [...s.metrics, message.line].slice(-300),
+          metrics: [...s.metrics, { ...message.line, id: `metric-${++metricCounter}` }].slice(-300),
           sessionUsage: accumulateSessionUsage(s.sessionUsage, message.line),
         }));
         return;
@@ -1076,11 +1134,13 @@ export const useStore = create<State>((set, get) => ({
 
           case "tool_call":
             set((s) => ({
+              stepCount: s.stepCount + 1,
               items: [
                 ...closeStreaming(s.items),
                 {
                   kind: "tool",
                   id: nextId(),
+                  callId: event.id,
                   name: event.name,
                   args: event.args,
                   status: "running",
@@ -1091,19 +1151,21 @@ export const useStore = create<State>((set, get) => ({
 
           case "tool_result":
             set((s) => {
-              // Attach the result to the most recent matching call that is still
-              // running, so parallel calls cannot overwrite each other's output.
+              // Provider IDs pair results with their exact call; retain the name/FIFO
+              // fallback for older engines that do not emit IDs.
               const items = [...s.items];
               for (let i = items.length - 1; i >= 0; i--) {
                 const item = items[i];
                 if (
                   item.kind === "tool" &&
-                  item.name === event.name &&
+                  (event.id
+                    ? item.callId === event.id
+                    : item.name === event.name) &&
                   item.status === "running"
                 ) {
                   items[i] = {
                     ...item,
-                    result: event.result,
+                    result: truncateToolResult(event.result),
                     status: event.result.startsWith("Blocked:")
                       ? "denied"
                       : event.result.startsWith("Error:")
@@ -1141,11 +1203,15 @@ export const useStore = create<State>((set, get) => ({
 
   send: (text) => {
     const trimmed = text.trim();
-    if (!trimmed || get().busy) return;
+    if (!trimmed) return;
+    if (get().busy) {
+      get().pushNotice("Aguarde o turno atual terminar para enviar outra mensagem.", "error");
+      return;
+    }
 
     // Slash commands are UI-level: echo them so the transcript reads as a
     // conversation, but never send them to the model.
-    if (trimmed.startsWith("/")) {
+    if (isKnownSlashCommand(trimmed, get().skills)) {
       set((s) => ({
         items: [
           ...closeStreaming(s.items),
@@ -1161,6 +1227,7 @@ export const useStore = create<State>((set, get) => ({
         ...closeStreaming(s.items),
         { kind: "user", id: nextId(), text: trimmed },
       ],
+      turnCount: s.turnCount + 1,
       busy: true,
     }));
     window.ruby.sendPrompt(trimmed);
@@ -1168,12 +1235,16 @@ export const useStore = create<State>((set, get) => ({
 
   activateSkill: (name, args) => {
     const state = get();
-    if (state.busy) return;
-    if (!state.skills.some((skill) => skill.name === name)) {
+    if (state.busy) {
+      state.pushNotice("Aguarde o turno atual terminar para ativar outra Skill.", "error");
+      return;
+    }
+    const skill = state.skills.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+    if (!skill) {
       state.pushNotice(`Skill desconhecida: ${name}`, "error");
       return;
     }
-    const command = `/${name}${args.trim() ? ` ${args.trim()}` : ""}`;
+    const command = `/${skill.name}${args.trim() ? ` ${args.trim()}` : ""}`;
     set((s) => ({
       items: [
         ...closeStreaming(s.items),
@@ -1181,7 +1252,7 @@ export const useStore = create<State>((set, get) => ({
       ],
       busy: true,
     }));
-    window.ruby.activateSkill(name, args);
+    window.ruby.activateSkill(skill.name, args);
   },
 
   pushNotice: (text, tone = "info") => {
@@ -1266,6 +1337,8 @@ export const useStore = create<State>((set, get) => ({
   reset: () => {
     set({
       items: [],
+      turnCount: 0,
+      stepCount: 0,
       contextUsed: 0,
       metrics: [],
       sessionUsage: emptySessionUsageStats(),

@@ -13,7 +13,7 @@
  * checkout: that is the exact artifact this app depends on, and it already ships
  * its built-ins under `dist/skills/builtin`.
  */
-import { cp, mkdir, readdir } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,8 +30,28 @@ if (!existsSync(source)) {
   process.exit(1);
 }
 
+await rm(target, { recursive: true, force: true });
 await mkdir(target, { recursive: true });
 await cp(source, target, { recursive: true });
 
-const copied = (await readdir(target, { withFileTypes: true })).filter((e) => e.isDirectory());
-console.log(`[copy-skills] ${copied.length} skills -> out/engine/skills/builtin`);
+async function countSkills(directory) {
+  let count = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillDirectory = join(directory, entry.name);
+    try {
+      await readFile(join(skillDirectory, "SKILL.md"), "utf8");
+      count++;
+    } catch {
+      count += await countSkills(skillDirectory);
+    }
+  }
+  return count;
+}
+
+const copied = await countSkills(target);
+if (copied === 0) {
+  console.error(`[copy-skills] no builtin skills were copied from ${source}`);
+  process.exit(1);
+}
+console.log(`[copy-skills] ${copied} skills -> out/engine/skills/builtin`);

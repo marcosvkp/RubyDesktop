@@ -39,6 +39,7 @@ interface RefEntry {
   backendNodeId: number;
   role: string;
   name: string;
+  pageEpoch: number;
 }
 
 export interface BrowserSnapshot {
@@ -79,6 +80,8 @@ export class BrowserController {
   private activeTabId: string | undefined;
   private tabSequence = 0;
   private readonly attachedViews = new WeakSet<WebContents>();
+  /** Changes whenever the active page or tab changes, invalidating old refs. */
+  private pageEpoch = 0;
   /** Refs from the most recent snapshot, keyed by ref string. */
   private refs = new Map<string, RefEntry>();
   private refSeq = 0;
@@ -101,11 +104,20 @@ export class BrowserController {
   }
 
   listTabs(): BrowserTabSummary[] {
-    return [...this.tabs].map(([id, view]) => ({
-      id,
-      url: view.webContents.getURL(),
-      title: view.webContents.getTitle() || "Nova aba",
-    }));
+    const summaries: BrowserTabSummary[] = [];
+    for (const [id, view] of this.tabs) {
+      try {
+        if (view.webContents.isDestroyed()) continue;
+        summaries.push({
+          id,
+          url: view.webContents.getURL(),
+          title: view.webContents.getTitle() || "Nova aba",
+        });
+      } catch {
+        // A tab may be destroyed while the window is shutting down.
+      }
+    }
+    return summaries;
   }
 
   /**
@@ -151,6 +163,21 @@ export class BrowserController {
       },
     });
     const id = `browser-tab-${++this.tabSequence}`;
+    view.webContents.on("will-navigate", (event, url) => {
+      if (isAllowedBrowserUrl(url)) {
+        if (this.activeTabId === id) this.invalidatePage();
+        return;
+      }
+      if (url === "about:blank" && !view.webContents.getURL()) return;
+      event.preventDefault();
+    });
+    view.webContents.on("will-redirect", (event, url) => {
+      if (!isAllowedBrowserUrl(url)) event.preventDefault();
+      else if (this.activeTabId === id) this.invalidatePage();
+    });
+    // Popups are not allowed to create unsupervised WebContents. M9 can route
+    // safe web links into an explicitly managed tab if that behavior is needed.
+    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     this.tabs.set(id, view);
     win.contentView.addChildView(view);
     if (!view.webContents.getURL())
@@ -188,7 +215,7 @@ export class BrowserController {
     if (this.activeTabId !== id) return;
     this.view = null;
     this.activeTabId = undefined;
-    this.refs.clear();
+    this.invalidatePage();
     const fallback = [...this.tabs.keys()].at(-1);
     if (fallback) this.activateTab(fallback, bounds);
   }
@@ -209,7 +236,7 @@ export class BrowserController {
     this.tabs.clear();
     this.view = null;
     this.activeTabId = undefined;
-    this.refs.clear();
+    this.invalidatePage();
     for (const view of views) {
       try {
         win?.contentView.removeChildView(view);
@@ -237,7 +264,7 @@ export class BrowserController {
     }
     this.view = next;
     this.activeTabId = id;
-    this.refs.clear();
+    this.invalidatePage();
     this.refSeq = 0;
     try {
       win.contentView.removeChildView(next);
@@ -249,10 +276,15 @@ export class BrowserController {
   }
 
   /** Attaches the debugger once. Idempotent. */
-  private async ensureAttached(): Promise<WebContents> {
-    if (!this.view)
+  private invalidatePage(): void {
+    this.pageEpoch++;
+    this.refs.clear();
+    this.refSeq = 0;
+  }
+
+  private async ensureAttached(wc: WebContents): Promise<WebContents> {
+    if (wc.isDestroyed())
       throw new Error("the browser is not open; call browser_open first");
-    const wc = this.view.webContents;
     if (!this.attachedViews.has(wc)) {
       await wc.debugger.attach(CDP_VERSION);
       this.attachedViews.add(wc);
@@ -276,22 +308,44 @@ export class BrowserController {
   private send<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
+    timeoutMs?: number,
+    timeoutMessage?: string,
+    expectedPageEpoch?: number,
   ): Promise<T> {
     const run = async (): Promise<T> => {
-      const wc = await this.ensureAttached();
-      return (await wc.debugger.sendCommand(method, params)) as T;
+      const pageEpoch = expectedPageEpoch ?? this.pageEpoch;
+      const wc = this.view?.webContents;
+      if (!wc || wc.isDestroyed())
+        throw new Error("the browser is not open; call browser_open first");
+      if (pageEpoch !== this.pageEpoch)
+        throw new Error("the page changed; take a new browser snapshot before acting");
+      const command = async (): Promise<T> => {
+        await this.ensureAttached(wc);
+        if (this.view?.webContents !== wc || pageEpoch !== this.pageEpoch)
+          throw new Error("the page changed; take a new browser snapshot before acting");
+        return (await wc.debugger.sendCommand(method, params)) as T;
+      };
+      return timeoutMs
+        ? withTimeout(
+            command(),
+            timeoutMs,
+            timeoutMessage ?? `CDP command '${method}' timed out.`,
+          )
+        : command();
     };
-    // Chain onto the queue so two tool calls cannot interleave CDP traffic.
+    return this.enqueue(run);
+  }
+
+  /** Chains browser operations so navigation and CDP commands cannot overtake. */
+  private enqueue<T>(run: () => Promise<T>): Promise<T> {
     const next = this.queue.then(run, run);
-    // Keep the chain alive even if this command rejects.
     this.queue = next.catch(() => undefined);
     return next;
   }
 
   /** Waits for the page to finish loading, or for the timeout. */
-  private waitForLoad(timeoutMs = 20_000): Promise<void> {
-    const wc = this.view?.webContents;
-    if (!wc || !wc.isLoading()) return Promise.resolve();
+  private waitForLoad(wc: WebContents, timeoutMs = 20_000): Promise<void> {
+    if (wc.isDestroyed() || !wc.isLoading()) return Promise.resolve();
 
     return new Promise((resolve) => {
       const done = (): void => {
@@ -308,7 +362,8 @@ export class BrowserController {
 
   /** Navigates and waits for the load to settle. */
   async navigate(url: string): Promise<BrowserSnapshot> {
-    if (!this.view)
+    const requestedView = this.view;
+    if (!requestedView)
       throw new Error("the browser is not open; call browser_open first");
 
     // Reject anything that is not a real web URL: `file://` would let a page read
@@ -325,22 +380,31 @@ export class BrowserController {
       );
     }
 
-    // A navigation invalidates every ref from the previous page.
-    this.refs.clear();
-    await this.view.webContents.loadURL(parsed.toString());
-    await this.waitForLoad();
+    await this.enqueue(async () => {
+      if (this.view !== requestedView)
+        throw new Error("the active browser tab changed before navigation");
+      const wc = requestedView.webContents;
+      this.invalidatePage();
+      await wc.loadURL(parsed.toString());
+      await this.waitForLoad(wc);
+    });
     return this.snapshot();
   }
 
   async goBack(): Promise<BrowserSnapshot> {
-    const wc = this.view?.webContents;
+    const requestedView = this.view;
+    const wc = requestedView?.webContents;
     if (!wc)
       throw new Error("the browser is not open; call browser_open first");
-    this.refs.clear();
-    if (wc.navigationHistory.canGoBack()) {
-      wc.navigationHistory.goBack();
-      await this.waitForLoad();
-    }
+    await this.enqueue(async () => {
+      if (this.view !== requestedView || wc.isDestroyed())
+        throw new Error("the active browser tab changed before going back");
+      if (wc.navigationHistory.canGoBack()) {
+        this.invalidatePage();
+        wc.navigationHistory.goBack();
+        await this.waitForLoad(wc);
+      }
+    });
     return this.snapshot();
   }
 
@@ -355,9 +419,16 @@ export class BrowserController {
     if (!wc)
       throw new Error("the browser is not open; call browser_open first");
 
+    const pageEpoch = this.pageEpoch;
     const { nodes } = await this.send<{ nodes: RawAxNode[] }>(
       "Accessibility.getFullAXTree",
+      undefined,
+      undefined,
+      undefined,
+      pageEpoch,
     );
+    if (pageEpoch !== this.pageEpoch)
+      throw new Error("the page changed while taking a snapshot; try again");
 
     this.refs.clear();
     this.refSeq = 0;
@@ -380,7 +451,7 @@ export class BrowserController {
       let ref: string | undefined;
       if (INTERACTIVE_ROLES.has(role) && typeof backendNodeId === "number") {
         ref = `e${++this.refSeq}`;
-        this.refs.set(ref, { ref, backendNodeId, role, name });
+        this.refs.set(ref, { ref, backendNodeId, role, name, pageEpoch });
         refCount++;
       }
 
@@ -415,7 +486,7 @@ export class BrowserController {
   /** Resolves a ref from the latest snapshot, or throws a useful error. */
   private requireRef(ref: string): RefEntry {
     const entry = this.refs.get(ref);
-    if (!entry) {
+    if (!entry || entry.pageEpoch !== this.pageEpoch) {
       const known = [...this.refs.keys()].slice(0, 12).join(", ");
       throw new Error(
         `unknown ref '${ref}'. Refs are valid only until the page changes; ` +
@@ -429,7 +500,7 @@ export class BrowserController {
   private async centreOf(entry: RefEntry): Promise<{ x: number; y: number }> {
     const { model } = await this.send<{
       model: { content: number[] };
-    }>("DOM.getBoxModel", { backendNodeId: entry.backendNodeId });
+    }>("DOM.getBoxModel", { backendNodeId: entry.backendNodeId }, undefined, undefined, entry.pageEpoch);
 
     const c = model.content;
     // content is [x1,y1, x2,y2, x3,y3, x4,y4] — the four corners.
@@ -458,7 +529,7 @@ export class BrowserController {
     const entry = this.requireRef(ref);
     await this.send("DOM.scrollIntoViewIfNeeded", {
       backendNodeId: entry.backendNodeId,
-    });
+    }, undefined, undefined, entry.pageEpoch);
     const { x, y } = await this.centreOf(entry);
     const at = { x: Math.round(x), y: Math.round(y) };
     this.focusPage();
@@ -475,22 +546,23 @@ export class BrowserController {
       type: "mouseMoved",
       ...base,
       buttons: 0,
-    });
+    }, undefined, undefined, entry.pageEpoch);
     await this.send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       ...base,
       buttons: 1,
-    });
+    }, undefined, undefined, entry.pageEpoch);
     await this.send("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       ...base,
       buttons: 0,
-    });
+    }, undefined, undefined, entry.pageEpoch);
 
     // A click often navigates or opens a menu; give it a beat before snapshotting
     // so the returned tree describes the result rather than the page that was.
     await delay(400);
-    await this.waitForLoad(5_000);
+    const wc = this.view?.webContents;
+    if (wc) await this.waitForLoad(wc, 5_000);
     return this.snapshot();
   }
 
@@ -503,12 +575,12 @@ export class BrowserController {
     const entry = this.requireRef(ref);
     await this.send("DOM.scrollIntoViewIfNeeded", {
       backendNodeId: entry.backendNodeId,
-    });
+    }, undefined, undefined, entry.pageEpoch);
     this.focusPage();
-    await this.send("DOM.focus", { backendNodeId: entry.backendNodeId });
+    await this.send("DOM.focus", { backendNodeId: entry.backendNodeId }, undefined, undefined, entry.pageEpoch);
     // insertText fires a real input event, which is what React-controlled fields
     // listen for. Setting .value over CDP would bypass their state.
-    await this.send("Input.insertText", { text });
+    await this.send("Input.insertText", { text }, undefined, undefined, entry.pageEpoch);
 
     if (submit) {
       for (const type of ["keyDown", "keyUp"] as const) {
@@ -518,10 +590,11 @@ export class BrowserController {
           code: "Enter",
           windowsVirtualKeyCode: 13,
           nativeVirtualKeyCode: 13,
-        });
+        }, undefined, undefined, entry.pageEpoch);
       }
       await delay(400);
-      await this.waitForLoad(5_000);
+      const wc = this.view?.webContents;
+      if (wc) await this.waitForLoad(wc, 5_000);
     }
     return this.snapshot();
   }
@@ -545,7 +618,11 @@ export class BrowserController {
           ? "window.scrollTo(0, document.body.scrollHeight)"
           : `window.scrollBy(0, ${direction === "down" ? amount : -amount})`;
 
-    await wc.executeJavaScript(`${script}; true`);
+    await this.enqueue(async () => {
+      if (this.view?.webContents !== wc || wc.isDestroyed())
+        throw new Error("the active browser tab changed before scrolling");
+      await wc.executeJavaScript(`${script}; true`);
+    });
     await delay(250);
     return this.snapshot();
   }
@@ -554,14 +631,14 @@ export class BrowserController {
   async screenshot(
     path: string,
   ): Promise<{ path: string; width: number; height: number }> {
-    // `Page.captureScreenshot` waits for a compositor frame. An offscreen or hidden
-    // view may never produce one, and the command then never settles — which would
-    // consume the entire turn budget. Bound it and fail with a clear reason.
-    const data = await withTimeout(
-      this.send<{ data: string }>("Page.captureScreenshot", {
+    // The timeout belongs inside `send`'s queue operation. If it only wraps the
+    // returned promise, the unresolved CDP call still blocks every later command.
+    const data = await this.send<{ data: string }>(
+      "Page.captureScreenshot",
+      {
         format: "png",
         captureBeyondViewport: false,
-      }),
+      },
       SCREENSHOT_TIMEOUT_MS,
       "Page.captureScreenshot did not settle — is the browser panel visible?",
     );
@@ -584,6 +661,15 @@ export class BrowserController {
     const wc = this.view?.webContents;
     if (!wc) return null;
     return { url: wc.getURL(), title: wc.getTitle() };
+  }
+}
+
+function isAllowedBrowserUrl(rawUrl: string): boolean {
+  try {
+    const protocol = new URL(rawUrl).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
   }
 }
 

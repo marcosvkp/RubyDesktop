@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Activity, Database, Gauge, Timer } from "lucide-react";
-import { useStore, type ChatItem } from "../store";
+import { useStore } from "../store";
 import { cn, formatTokens } from "../lib/utils";
 
 type StatKey = "session" | "tokens" | "cache" | "context";
 
 /** Clickable chat-footer metrics, with details kept close to the composer. */
 export function ChatStats(): React.JSX.Element {
-  const items = useStore((s) => s.items);
+  const turns = useStore((s) => s.turnCount);
+  const steps = useStore((s) => s.stepCount);
   const usage = useStore((s) => s.sessionUsage);
   const contextUsed = useStore((s) => s.contextUsed);
   const contextWindow = useStore((s) => s.contextWindow);
@@ -30,11 +31,6 @@ export function ChatStats(): React.JSX.Element {
     };
   }, [openStat]);
 
-  const turns = items.filter(
-    (item): item is Extract<ChatItem, { kind: "user" }> =>
-      item.kind === "user" && !item.text.trimStart().startsWith("/"),
-  ).length;
-  const steps = items.filter((item) => item.kind === "tool").length;
   const totalTokens = usage.inputTokens + usage.outputTokens;
   const hasCache = usage.cacheMeasuredCalls > 0 && usage.cacheMeasuredInputTokens > 0;
   const cacheHit = hasCache

@@ -58,6 +58,11 @@ Lista de tarefas:
 
 ~~Antigo~~ → novo. Veja [a documentação](https://example.com) para mais.
 
+![imagem remota bloqueada](https://example.com/image.png)
+
+<script>window.__rubyMarkdownXss = true</script>
+<img src="x" onerror="window.__rubyMarkdownXss = true">
+
 ---
 
 Fim.`;
@@ -149,6 +154,9 @@ async function check(api) {
       })(),
       quote: q("blockquote")?.textContent?.trim() ?? null,
       link: q("a")?.getAttribute("href") ?? null,
+      imagePlaceholder: q('[role="note"]')?.textContent ?? null,
+      rawImageCount: root.querySelectorAll("img").length,
+      rawScriptCount: root.querySelectorAll("script").length,
       hr: Boolean(q("hr")),
       // The literal markers must be gone — this is what the bug looked like.
       rawMarkers: /\\*\\*|^\\|/m.test(root.innerText),
@@ -175,6 +183,8 @@ async function check(api) {
     ["task list has no disc marker", dom.taskListMarker === "none"],
     ["blockquote", (dom.quote || "").includes("renderer de escudo")],
     ["link href", dom.link === "https://example.com"],
+    ["remote image placeholder", (dom.imagePlaceholder || "").includes("imagem remota bloqueada")],
+    ["raw HTML is inert", dom.rawImageCount === 0 && dom.rawScriptCount === 0],
     ["horizontal rule", dom.hr === true],
     ["no literal markdown markers left", dom.rawMarkers === false],
   ];
@@ -183,6 +193,21 @@ async function check(api) {
     if (!ok) throw new Error(`markdown check failed: ${label}\nDOM: ${JSON.stringify(dom, null, 2)}`);
     api.log(`ok: ${label}`);
   }
+  const xssExecuted = await api.readDom("window.__rubyMarkdownXss === true");
+  if (xssExecuted) throw new Error("raw HTML executed inside assistant markdown");
+  api.log("ok: assistant raw HTML did not execute");
+
+  const workflowMessage = "fixture workflow phase reached";
+  send({
+    type: "workflowEvent",
+    event: { type: "phase_start", name: "fixture", message: workflowMessage },
+  });
+  await new Promise((r) => setTimeout(r, 200));
+  const workflowRendered = await api.readDom(
+    `Boolean([...document.querySelectorAll("span")].find((node) => node.textContent === ${JSON.stringify(`Workflow · ${workflowMessage}`)}))`,
+  );
+  if (!workflowRendered) throw new Error("workflow progress event did not render in the chat");
+  api.log("ok: workflow progress event rendered in the chat");
 
   const statsReady = await api.readDom(`(() => {
     const ids = ["session", "tokens", "cache", "context"];

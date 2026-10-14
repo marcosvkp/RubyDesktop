@@ -283,7 +283,7 @@ function AddServerForm({
         >
           {test.connected
             ? `Conectado — ${test.tools.length} ${test.tools.length === 1 ? "ferramenta disponível" : "ferramentas disponíveis"}.`
-            : `Falha: ${test.error}`}
+            : `Falha: ${test.error || "sem detalhes"}`}
         </div>
       ) : null}
 

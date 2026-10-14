@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Globe, X, RotateCw, Plus } from "lucide-react";
+import { Globe, X, RotateCw, Plus, SquareX } from "lucide-react";
 import { useStore } from "../store";
 import { cn } from "../lib/utils";
 
@@ -18,8 +18,10 @@ import { cn } from "../lib/utils";
  */
 export function BrowserPanel({
   onClose,
+  onCloseBrowser,
 }: {
   onClose: () => void;
+  onCloseBrowser: () => void;
 }): React.JSX.Element {
   const browser = useStore((s) => s.browser);
   const placeholder = useRef<HTMLDivElement>(null);
@@ -163,11 +165,20 @@ export function BrowserPanel({
         <button
           type="button"
           onClick={onClose}
-          title="Fechar navegador"
-          aria-label="Fechar navegador"
+          title="Ocultar painel do navegador"
+          aria-label="Ocultar painel do navegador"
           className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onCloseBrowser}
+          title="Encerrar navegador"
+          aria-label="Encerrar navegador"
+          className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        >
+          <SquareX className="h-3.5 w-3.5" />
         </button>
       </header>
 

@@ -1,3 +1,5 @@
+import ipcChannels from "./ipc-channels.json";
+
 /**
  * The IPC contract between the renderer, the main process and the engine host.
  *
@@ -452,7 +454,6 @@ export type EngineResponse =
   | { type: "compacting"; active: boolean }
   | { type: "error"; message: string }
   | { type: "fatal"; message: string };
-
 /**
  * The narrow API exposed on `window.ruby` by the preload script.
  *
@@ -468,8 +469,6 @@ export interface RubyDesktopApi {
   getRecentWorkspaces(): Promise<RecentWorkspaceSummary[]>;
   /** Switch workspace. The engine restarts with the new directory as its cwd. */
   setWorkspace(path: string): void;
-  /** Engine lifecycle + model catalog snapshot. */
-  getEngineInfo(): Promise<EngineResponse | undefined>;
   /** Encrypt and store the Ruby API key through the operating system keychain. */
   saveApiKey(key: string): Promise<{ ok: boolean; error?: string }>;
   /** Start a turn. Streamed output arrives via `onEngineMessage`. */
@@ -569,51 +568,5 @@ export interface RubyDesktopApi {
 }
 
 /** IPC channel names, kept in one place so both sides cannot drift. */
-export const IPC = {
-  /** Renderer → main, request/response. */
-  invoke: {
-    getWorkspace: "ruby:get-workspace",
-    getRecentWorkspaces: "ruby:get-recent-workspaces",
-    pickWorkspace: "ruby:pick-workspace",
-    getEngineInfo: "ruby:get-engine-info",
-    saveApiKey: "ruby:save-api-key",
-  },
-  /** Renderer → main, fire-and-forget. */
-  send: {
-    prompt: "ruby:prompt",
-    activateSkill: "ruby:activate-skill",
-    abort: "ruby:abort",
-    setWorkspace: "ruby:set-workspace",
-    setModel: "ruby:set-model",
-    setPermissionMode: "ruby:set-permission-mode",
-    approvalResponse: "ruby:approval-response",
-    userQuestionResponse: "ruby:user-question-response",
-    subAgentConfigResponse: "ruby:sub-agent-config-response",
-    subAgentReviewResponse: "ruby:sub-agent-review-response",
-    compact: "ruby:compact",
-    newSession: "ruby:new-session",
-    resumeSession: "ruby:resume-session",
-    getGoal: "ruby:get-goal",
-    setGoal: "ruby:set-goal",
-    noteGoal: "ruby:note-goal",
-    setGoalStatus: "ruby:set-goal-status",
-    setGoalMaxRounds: "ruby:set-goal-max-rounds",
-    startAutoGoal: "ruby:start-auto-goal",
-    stopAutoGoal: "ruby:stop-auto-goal",
-    clearGoal: "ruby:clear-goal",
-    refreshMcp: "ruby:refresh-mcp",
-    addMcpServer: "ruby:add-mcp-server",
-    removeMcpServer: "ruby:remove-mcp-server",
-    testMcpServer: "ruby:test-mcp-server",
-    openBrowser: "ruby:open-browser",
-    newBrowserTab: "ruby:new-browser-tab",
-    selectBrowserTab: "ruby:select-browser-tab",
-    closeBrowserTab: "ruby:close-browser-tab",
-    closeBrowser: "ruby:close-browser",
-    setBrowserBounds: "ruby:set-browser-bounds",
-    reset: "ruby:reset",
-    refreshModels: "ruby:refresh-models",
-  },
-  /** Main → renderer, streamed engine output. */
-  engineMessage: "ruby:engine-message",
-} as const;
+/** Runtime channel map is shared with the CommonJS smoke harness. */
+export const IPC = ipcChannels;

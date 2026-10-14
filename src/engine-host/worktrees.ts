@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 
 const execFile = promisify(execFileCallback);
 
@@ -13,6 +14,7 @@ interface WorkerWorktree {
   root: string;
   baseCommit: string;
   snapshotDir: string;
+  reviewedDiff?: string;
 }
 
 export interface WorktreeDiff {
@@ -42,19 +44,25 @@ export class WorktreeManager {
       GIT_COMMITTER_NAME: "Ruby Desktop Agent",
       GIT_COMMITTER_EMAIL: "ruby-agent@localhost",
     };
+    let branch: string | undefined;
+    const workerPath = join(snapshotDir, "worktree");
 
     try {
       await this.git(root, ["read-tree", head], env);
       await this.git(root, ["add", "-A", "--", "."], env);
       const tree = await this.git(root, ["write-tree"], env);
       const baseCommit = await this.git(root, ["commit-tree", tree, "-p", head, "-m", "Ruby Desktop worker baseline"], env);
-      const safeId = id.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 24);
-      const branch = `ruby-agent/${safeId}`;
-      const workerPath = join(snapshotDir, "worktree");
+      const safeId = id.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 24) || "worker";
+      branch = `ruby-agent/${safeId}-${randomUUID().slice(0, 8)}`;
       await this.git(root, ["worktree", "add", "-b", branch, workerPath, baseCommit]);
       this.workers.set(id, { id, branch, path: workerPath, root, baseCommit, snapshotDir });
       return workerPath;
     } catch (error) {
+      if (branch) {
+        await this.git(root, ["worktree", "remove", "--force", workerPath]).catch(() => {});
+        await this.git(root, ["worktree", "prune"]).catch(() => {});
+        await this.git(root, ["branch", "-D", branch]).catch(() => {});
+      }
       await rm(snapshotDir, { recursive: true, force: true }).catch(() => {});
       throw error;
     }
@@ -67,12 +75,15 @@ export class WorktreeManager {
       this.gitRaw(worker.path, ["diff", "--cached", "--binary", "--full-index", worker.baseCommit]),
       this.git(worker.path, ["diff", "--cached", "--name-only", "-z", worker.baseCommit]),
     ]);
+    worker.reviewedDiff = diff;
     return { diff, changedFiles: files.split("\0").filter(Boolean) };
   }
 
   async apply(id: string): Promise<void> {
     const worker = this.requireWorker(id);
-    const { diff } = await this.diff(id);
+    const diff = worker.reviewedDiff;
+    if (diff === undefined)
+      throw new Error("The worker diff must be reviewed before it can be applied.");
     if (!diff.trim()) return;
     const patchPath = join(worker.snapshotDir, "worker.patch");
     await writeFile(patchPath, diff, "utf8");
@@ -87,8 +98,21 @@ export class WorktreeManager {
   async cleanup(id: string): Promise<void> {
     const worker = this.workers.get(id);
     if (!worker) return;
+    try {
+      await this.git(worker.root, ["worktree", "remove", "--force", worker.path]);
+    } catch (firstError) {
+      await this.git(worker.root, ["worktree", "prune"]).catch(() => {});
+      try {
+        await this.git(worker.root, ["worktree", "remove", "--force", worker.path]);
+      } catch (retryError) {
+        console.warn(
+          `[worktrees] Could not remove ${worker.path}; leaving it registered for a later cleanup.`,
+          retryError instanceof Error ? retryError.message : String(firstError),
+        );
+        return;
+      }
+    }
     this.workers.delete(id);
-    await this.git(worker.root, ["worktree", "remove", "--force", worker.path]).catch(() => {});
     await this.git(worker.root, ["branch", "-D", worker.branch]).catch(() => {});
     await rm(worker.snapshotDir, { recursive: true, force: true }).catch(() => {});
   }

@@ -11,13 +11,8 @@
  * method list — the agent cannot ask the main process to do anything else.
  */
 import type { Tool, ToolRegistry, ToolResult } from "@rubyclii/cli";
-import type { BrowserMethod, BrowserParams, BrowserResult } from "@shared/ipc";
-
-interface PendingBrowserCall {
-  resolve: (result: BrowserResult) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-}
+import type { BrowserResult } from "@shared/ipc";
+import { BrowserBridge } from "@shared/browser-bridge";
 
 /**
  * How long a browser operation may take before the tool fails.
@@ -25,53 +20,7 @@ interface PendingBrowserCall {
  * Long enough for a slow page load, short enough that a wedged browser does not
  * consume the whole turn budget.
  */
-const BROWSER_TIMEOUT_MS = 45_000;
-
-export class BrowserBridge {
-  private pending = new Map<string, PendingBrowserCall>();
-  private seq = 0;
-
-  constructor(
-    /** Posts a request to the main process. */
-    private readonly post: (id: string, method: BrowserMethod, params: unknown) => void,
-  ) {}
-
-  /** Calls one browser method and waits for the main process to answer. */
-  call<M extends BrowserMethod>(
-    method: M,
-    params: BrowserParams[M],
-  ): Promise<BrowserResult> {
-    const id = `b${++this.seq}`;
-    return new Promise<BrowserResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`browser ${method} timed out after ${BROWSER_TIMEOUT_MS}ms`));
-      }, BROWSER_TIMEOUT_MS);
-
-      this.pending.set(id, { resolve, reject, timer });
-      this.post(id, method, params);
-    });
-  }
-
-  /** Settles a pending call. Unknown ids are ignored — a late reply is not an error. */
-  resolve(id: string, ok: boolean, result?: BrowserResult, error?: string): void {
-    const pending = this.pending.get(id);
-    if (!pending) return;
-    this.pending.delete(id);
-    clearTimeout(pending.timer);
-    if (ok) pending.resolve(result ?? { text: "(no result)" });
-    else pending.reject(new Error(error ?? "browser operation failed"));
-  }
-
-  /** Fails every in-flight call — used when the turn ends or the app quits. */
-  failAll(reason: string): void {
-    for (const [, pending] of [...this.pending]) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error(reason));
-    }
-    this.pending.clear();
-  }
-}
+export { BrowserBridge };
 
 /** Turns a browser result into a tool result the model can read. */
 function toToolResult(result: BrowserResult): ToolResult {
@@ -181,7 +130,6 @@ export function createBrowserTools(bridge: BrowserBridge): Tool[] {
 
   const scroll: Tool = {
     name: "browser_scroll",
-    readonly: true,
     description:
       "Scroll the page and return the updated tree. Useful when the content you need is below the fold.",
     parameters: {
@@ -220,7 +168,6 @@ export function createBrowserTools(bridge: BrowserBridge): Tool[] {
 
   const screenshot: Tool = {
     name: "browser_screenshot",
-    readonly: true,
     description:
       "Capture the browser viewport as a PNG and return the file path. Use this when the layout " +
       "itself matters (visual bugs, CSS), not for reading text — browser_snapshot is better for that.",

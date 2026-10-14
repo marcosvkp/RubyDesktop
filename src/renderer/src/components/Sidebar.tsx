@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FolderClosed,
   FolderTree,
@@ -36,6 +36,7 @@ export function Sidebar({
   browserOpen: boolean;
 }): React.JSX.Element {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const engine = useStore((s) => s.engine);
   const busy = useStore((s) => s.busy);
   const sessions = useStore((s) => s.sessions);
@@ -47,6 +48,22 @@ export function Sidebar({
   const switchWorkspace = useStore((s) => s.switchWorkspace);
   const grants = useStore((s) => s.grants);
   const mcpServers = useStore((s) => s.mcpServers);
+
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    const closeOutside = (event: PointerEvent): void => {
+      if (!workspaceMenuRef.current?.contains(event.target as Node)) setWorkspaceMenuOpen(false);
+    };
+    const closeEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setWorkspaceMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeEscape);
+    };
+  }, [workspaceMenuOpen]);
 
   const grantCount = grants.project.length + grants.global.length;
   const mcpTools = mcpServers.reduce((n, server) => n + server.tools.length, 0);
@@ -69,7 +86,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="px-2">
+      <div ref={workspaceMenuRef} className="px-2">
         <button
           type="button"
           onClick={() => setWorkspaceMenuOpen((open) => !open)}
@@ -327,5 +344,7 @@ function formatSessionDate(id: string): string {
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
     month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
   }).format(date);
 }

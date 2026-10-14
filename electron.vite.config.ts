@@ -25,6 +25,11 @@ export default defineConfig({
           // implementation the app runs, rather than a copy free to drift.
           "browser-service": resolve(__dirname, "src/main/browser-service.ts"),
           browser: resolve(__dirname, "src/main/browser.ts"),
+          "update-manager": resolve(__dirname, "src/main/update-manager.ts"),
+          // Kept as a separately requireable entry so browser smoke tests exercise
+          // the same engine↔main RPC adapter as the utility process.
+          "browser-bridge": resolve(__dirname, "src/shared/browser-bridge.ts"),
+          "approval-policy": resolve(__dirname, "src/shared/approval-policy.ts"),
         },
       },
     },

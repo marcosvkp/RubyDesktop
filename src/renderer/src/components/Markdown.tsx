@@ -138,6 +138,12 @@ const COMPONENTS = {
     </a>
   ),
 
+  img: ({ alt }: { alt?: string }) => (
+    <span role="note" className="my-2 inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-[11px] text-muted-foreground">
+      Imagem não exibida{alt ? `: ${alt}` : ""}
+    </span>
+  ),
+
   blockquote: ({ children }: { children?: React.ReactNode }) => (
     <blockquote className="my-3 border-l-2 border-primary/50 pl-3 text-muted-foreground">
       {children}
@@ -236,10 +242,16 @@ function highlightCode(source: string, language: string): ReactNode[] | string {
     ? /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$-]*|\s+|.)/g
     : /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$-]*|\s+|.)/g;
   const tokens = source.match(tokenPattern) ?? [];
+  const nextSignificant: string[] = new Array(tokens.length);
+  let next = "";
+  for (let index = tokens.length - 1; index >= 0; index--) {
+    nextSignificant[index] = next;
+    if (tokens[index].trim()) next = tokens[index];
+  }
   const rendered: ReactNode[] = [];
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
-    const next = tokens.slice(index + 1).find((part) => part.trim());
+    const next = nextSignificant[index];
     let color = "";
     if (/^(\/\/|\/\*|<!--)/.test(token) || (hasHashComments && token.startsWith("#"))) {
       color = "text-muted-foreground";

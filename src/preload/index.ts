@@ -20,8 +20,6 @@ const api: RubyDesktopApi = {
 
   setWorkspace: (path) => ipcRenderer.send(IPC.send.setWorkspace, path),
 
-  getEngineInfo: () => ipcRenderer.invoke(IPC.invoke.getEngineInfo),
-
   saveApiKey: (key) => ipcRenderer.invoke(IPC.invoke.saveApiKey, key),
 
   sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),

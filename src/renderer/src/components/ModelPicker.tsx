@@ -149,7 +149,7 @@ function ModelOption({
       </span>
       <span className="flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground">
         {entry.supportsVision ? <Eye className="h-3.5 w-3.5" aria-label="Suporta imagens" /> : null}
-        {entry.supportsReasoning ? <span className="rounded border border-line px-1.5 py-0.5">Reasoning</span> : null}
+        {entry.supportsReasoning ? <span className="rounded border border-line px-1.5 py-0.5">Raciocínio</span> : null}
         {entry.contextWindow ? <span className="font-mono">{formatTokens(entry.contextWindow)}</span> : null}
       </span>
     </button>

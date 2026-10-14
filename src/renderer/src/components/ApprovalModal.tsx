@@ -22,6 +22,7 @@ export function ApprovalModal(): React.JSX.Element | null {
   const respond = useStore((s) => s.respondApproval);
   const [showArgs, setShowArgs] = useState(false);
   const allowRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Reset the disclosure each time a new request arrives, and focus the primary
   // action so the keyboard flow is immediate.
@@ -36,10 +37,30 @@ export function ApprovalModal(): React.JSX.Element | null {
   const answer = (decision: "allow" | "deny", scope: ApprovalScope, grantKey?: GrantKeyKind): void =>
     respond(decision, scope, grantKey);
 
-  const onKeyDown = (event: React.KeyboardEvent): void => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
       answer("deny", "once");
+      return;
+    }
+    if (event.key === "Tab") {
+      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? [])].filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
   };
 
@@ -47,11 +68,15 @@ export function ApprovalModal(): React.JSX.Element | null {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
       onKeyDown={onKeyDown}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) answer("deny", "once");
+      }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="approval-title"
+      aria-describedby="approval-help"
     >
-      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl shadow-black/60">
+      <div ref={dialogRef} tabIndex={-1} className="flex w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl shadow-black/60">
         <header className="flex items-center gap-2 border-b border-line px-5 py-3">
           <span className="h-1.5 w-1.5 rounded-full bg-chart-3" />
           <h2 id="approval-title" className="text-sm font-medium text-foreground">
@@ -149,9 +174,9 @@ export function ApprovalModal(): React.JSX.Element | null {
           </button>
         </footer>
 
-        <p className="border-t border-line px-5 py-2 text-[10px] text-muted-foreground">
+        <p id="approval-help" className="border-t border-line px-5 py-2 text-[10px] text-muted-foreground">
           As permissões ficam fora do repositório, então um projeto não pode autorizá-las por conta própria.
-          Ao negar, o agente recebe o bloqueio e pode continuar o turno.
+          Ao negar, o agente recebe o bloqueio e pode continuar o turno. Esc nega esta ação.
         </p>
       </div>
     </div>

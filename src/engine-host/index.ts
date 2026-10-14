@@ -83,6 +83,7 @@ import type {
   UserQuestionResult,
 } from "@rubyclii/cli";
 import { BrowserBridge, registerBrowserTools } from "./browser-tools.js";
+import { approvalGrantScope, confirmationDecision } from "@shared/approval-policy";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -152,6 +153,7 @@ let provider: Provider = "rubycli";
 let agent: Agent | undefined;
 let session: Session | undefined;
 let sessionMessages: Message[] = [];
+let sessionOutputTokens = 0;
 let sessionLogQueue: Promise<void> = Promise.resolve();
 let toolCount = 0;
 let skillCount = 0;
@@ -160,6 +162,11 @@ let modelCatalog: ModelSummary[] = [];
 const worktrees = new WorktreeManager();
 const subAgentControllers = new Map<string, AbortController>();
 const subAgentRuns = new Map<string, Promise<string>>();
+const subAgentPostState = new Map<
+  string,
+  { lastPostedAt: number; timer?: NodeJS.Timeout; latest?: SubAgentSummary }
+>();
+const SUBAGENT_STREAM_THROTTLE_MS = 100;
 const persistedSubAgentStatuses = new Map<string, SubAgentSummary["status"]>();
 const pendingSubAgentReviews = new Map<
   string,
@@ -172,6 +179,8 @@ let permissionMode: PermissionMode = "normal";
 let cancelled = false;
 let running = false;
 let activeTurnController: AbortController | undefined;
+let activeOperationCompletion: Promise<void> | undefined;
+let resolveActiveOperation: (() => void) | undefined;
 let autoGoalController: AbortController | undefined;
 let autoGoalRunning = false;
 
@@ -263,6 +272,13 @@ function postMcpStatus(): void {
 async function handleMcp(
   request: Extract<EngineRequest, { type: "mcp" }>,
 ): Promise<void> {
+  if (request.action !== "test" && (running || autoGoalRunning)) {
+    post({
+      type: "error",
+      message: "Finish or stop the current turn before changing MCP servers.",
+    });
+    return;
+  }
   switch (request.action) {
     case "refresh":
       // A full rebuild: the tools have to be registered into the registry the
@@ -324,6 +340,8 @@ async function handleMcp(
  * trips, none of which belong in the transcript the model sees.
  */
 function onObservability(event: ObservabilityEvent, agentId?: string): void {
+  if (!agentId && event.type === "llm_call_end")
+    sessionOutputTokens += event.outputTokens;
   let line: MetricLine | undefined;
   switch (event.type) {
     case "llm_call_end":
@@ -353,6 +371,7 @@ function onObservability(event: ObservabilityEvent, agentId?: string): void {
       line = { kind: "guard", guard: event.guard, reason: event.reason };
       break;
     case "compact_completed":
+      post({ type: "compacting", active: false });
       line = {
         kind: "compact",
         trigger: event.trigger,
@@ -360,10 +379,28 @@ function onObservability(event: ObservabilityEvent, agentId?: string): void {
       };
       break;
     case "compact_failed":
+      post({ type: "compacting", active: false });
       line = {
         kind: "compact",
         trigger: event.trigger,
         detail: `failed: ${event.error}`,
+      };
+      break;
+    case "compact_started":
+      post({ type: "compacting", active: true });
+      line = {
+        kind: "compact",
+        trigger: event.trigger,
+        detail: event.ratio === undefined
+          ? "compaction started"
+          : `compaction started at ${Math.round(event.ratio * 100)}% context usage`,
+      };
+      break;
+    case "compact_threshold_warned":
+      line = {
+        kind: "compact",
+        trigger: "auto",
+        detail: `context reached ${Math.round(event.ratio * 100)}%; automatic compaction is approaching`,
       };
       break;
     default:
@@ -427,6 +464,7 @@ const pendingSubAgentConfigs = new Map<string, PendingSubAgentConfig>();
 const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 const USER_QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
 const SUBAGENT_CONFIG_TIMEOUT_MS = 10 * 60 * 1000;
+const SUBAGENT_REVIEW_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Pauses the requesting agent until the renderer submits its structured answer. */
 function requestUserQuestion(
@@ -768,12 +806,16 @@ function createConfirmFn(agentId?: string): ConfirmFn {
   return async (toolName, args) => {
     const allowSet = new Set([...globalAllowSet, ...projectAllowSet]);
     // `interactive: true` — a modal is the GUI's equivalent of a TTY prompt.
-    const decision = decideConfirmation(
+    const policyDecision = decideConfirmation(
       allowSet,
       denyPatterns,
       toolName,
       args,
       true,
+    );
+    const decision = confirmationDecision(
+      matchesNeverAutoApprove(toolName, args),
+      policyDecision,
     );
     if (decision === "allow") return "allow";
     if (decision === "deny") return "deny";
@@ -794,14 +836,20 @@ function denyAgentApprovals(agentId: string): void {
 /** Persists a grant at the scope the user chose. */
 async function persistGrant(key: string, scope: ApprovalScope): Promise<void> {
   if (scope === "global") {
-    globalAllowSet.add(key);
     const cfg = await loadConfig();
     await saveConfig({
-      permissions: { ...cfg.permissions, allow: [...globalAllowSet] },
+      permissions: {
+        ...cfg.permissions,
+        allow: [...new Set([...(cfg.permissions?.allow ?? []), key])],
+      },
     });
+    globalAllowSet.add(key);
   } else if (scope === "project") {
+    await saveProjectPermissions(
+      process.cwd(),
+      [...new Set([...projectAllowSet, key])],
+    );
     projectAllowSet.add(key);
-    await saveProjectPermissions(process.cwd(), [...projectAllowSet]);
   }
 }
 
@@ -824,33 +872,45 @@ async function handleApprovalResponse(
 
   // Only an approval creates a grant, and a call on the catastrophic blocklist is
   // never remembered. The one-off click is still honoured either way.
-  let effectiveScope = scope;
-  if (decision !== "allow" || scope === "once") {
-    effectiveScope = "once";
-  } else if (pending.neverPersist) {
-    effectiveScope = "once";
+  let effectiveScope = approvalGrantScope(
+    decision,
+    scope,
+    pending.neverPersist,
+  );
+  if (pending.neverPersist && decision === "allow" && scope !== "once") {
     post({
       type: "error",
       message: `'${pending.toolName}' matches the built-in blocklist, so it was allowed once but not remembered.`,
     });
   }
 
-  if (effectiveScope !== "once") {
-    const key =
-      grantKey === "toolWide"
-        ? pending.grantKeys.toolWide
-        : grantKey === "mcpServerWide"
-          ? pending.grantKeys.mcpServerWide
-          : pending.grantKeys.exact;
-    if (key) {
-      await persistGrant(key, effectiveScope);
-      postGrants();
-    } else {
-      effectiveScope = "once";
+  let grantPersisted = false;
+  try {
+    if (effectiveScope !== "once") {
+      const key =
+        grantKey === "toolWide"
+          ? pending.grantKeys.toolWide
+          : grantKey === "mcpServerWide"
+            ? pending.grantKeys.mcpServerWide
+            : pending.grantKeys.exact;
+      if (key) {
+        await persistGrant(key, effectiveScope);
+        grantPersisted = true;
+      } else {
+        effectiveScope = "once";
+      }
     }
+  } catch (error) {
+    effectiveScope = "once";
+    post({
+      type: "error",
+      message: `A permissão foi concedida apenas desta vez porque não foi possível salvá-la: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  } finally {
+    // Persistence failure must never leave the agent waiting for this approval.
+    pending.settle(decision);
   }
-
-  pending.settle(decision);
+  if (grantPersisted) postGrants();
   post({ type: "approvalResolved", id, decision, scope: effectiveScope });
 }
 
@@ -940,11 +1000,6 @@ async function loadPermissions(): Promise<void> {
 }
 
 function postSubAgent(agent: SubAgentSummary): void {
-  post({ type: "subAgentUpdate", agent });
-  const previous = persistedSubAgentStatuses.get(agent.id);
-  const shouldPersist = previous !== agent.status || agent.status === "review";
-  if (!shouldPersist) return;
-  persistedSubAgentStatuses.set(agent.id, agent.status);
   const snapshot: SubAgentSummary = {
     ...agent,
     ...(agent.output ? { output: agent.output.slice(-12_000) } : {}),
@@ -953,22 +1008,56 @@ function postSubAgent(agent: SubAgentSummary): void {
       ? { changedFiles: agent.changedFiles.slice(0, 200) }
       : {}),
   };
-  void logSessionUiEvent({
-    version: 1,
-    kind: "subagent",
-    id: agent.id,
-    data: { agent: snapshot },
-  });
+  const previous = persistedSubAgentStatuses.get(agent.id);
+  const shouldPersist = previous !== agent.status;
+  const state = subAgentPostState.get(agent.id) ?? { lastPostedAt: 0 };
+  subAgentPostState.set(agent.id, state);
+  const emit = (value: SubAgentSummary): void => {
+    state.lastPostedAt = Date.now();
+    state.latest = undefined;
+    post({ type: "subAgentUpdate", agent: value });
+  };
+  if (shouldPersist || Date.now() - state.lastPostedAt >= SUBAGENT_STREAM_THROTTLE_MS) {
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = undefined;
+    emit(snapshot);
+  } else {
+    state.latest = snapshot;
+    if (!state.timer) {
+      state.timer = setTimeout(() => {
+        state.timer = undefined;
+        if (state.latest) emit(state.latest);
+      }, SUBAGENT_STREAM_THROTTLE_MS - (Date.now() - state.lastPostedAt));
+    }
+  }
+  if (shouldPersist) {
+    persistedSubAgentStatuses.set(agent.id, agent.status);
+    void logSessionUiEvent({
+      version: 1,
+      kind: "subagent",
+      id: agent.id,
+      data: { agent: snapshot },
+    });
+  }
 }
 
 function waitForSubAgentReview(
   id: string,
 ): Promise<"merge" | "discard" | "cancel"> {
   return new Promise((resolve) => {
-    pendingSubAgentReviews.set(id, (action) => {
+    const settle = (action: "merge" | "discard" | "cancel"): void => {
+      clearTimeout(timer);
       pendingSubAgentReviews.delete(id);
       resolve(action);
-    });
+    };
+    const timer = setTimeout(() => {
+      post({
+        type: "error",
+        message: `A revisão do sub-agente '${id}' expirou após 10 minutos e foi cancelada.`,
+      });
+      settle("cancel");
+    }, SUBAGENT_REVIEW_TIMEOUT_MS);
+    pendingSubAgentReviews.set(id, settle);
   });
 }
 
@@ -1071,7 +1160,7 @@ async function runSubAgent(
     if (options.role === "explorer") {
       childTools = new ToolRegistry();
       for (const tool of available.all())
-        if (tool.readonly) childTools.register(tool);
+        if (tool.readonly && tool.name !== "web_fetch") childTools.register(tool);
     }
     const childSkills = new SkillRegistry();
     await childSkills.discover(workspaceRoot);
@@ -1162,7 +1251,7 @@ async function runSubAgent(
 
       summary.status = "review";
       summary.progress = "Revise o diff; nada foi aplicado ao workspace";
-      summary.diff = result.diff;
+      summary.diff = result.diff.slice(0, 120_000);
       summary.changedFiles = result.changedFiles;
       postSubAgent({ ...summary, usage: { ...usage } });
 
@@ -1220,6 +1309,9 @@ async function runSubAgent(
     cancelUserQuestionsForAgent(id);
     subAgentControllers.delete(id);
     releaseSlot?.();
+    const postState = subAgentPostState.get(id);
+    if (postState?.timer) clearTimeout(postState.timer);
+    subAgentPostState.delete(id);
     if (hasWorktree) await worktrees.cleanup(id);
   }
 }
@@ -1319,11 +1411,17 @@ async function runWorkflowWorker(
     throw new Error(
       `Workflow worker '${request.name}' has no approved configuration.`,
     );
-  return runSubAgent(
+  const run = runSubAgent(
     workflowPrompt(request),
     workflowSubAgentOptions(request),
     config,
   );
+  subAgentRuns.set(config.id, run);
+  try {
+    return await run;
+  } finally {
+    subAgentRuns.delete(config.id);
+  }
 }
 
 function reportWorkflowEvent(event: WorkflowEvent): void {
@@ -1461,7 +1559,7 @@ function reportUsage(): void {
   post({
     type: "usage",
     inputTokens: stats.estimatedTokens,
-    outputTokens: 0,
+    outputTokens: sessionOutputTokens,
     contextWindow: stats.contextWindow,
   });
 }
@@ -1489,6 +1587,7 @@ async function startNewSession(): Promise<void> {
   await sessionLogQueue;
   session = await Session.create(process.cwd());
   sessionMessages = [];
+  sessionOutputTokens = 0;
   persistedSubAgentStatuses.clear();
   await buildAgent();
   await reportSessions([]);
@@ -1510,6 +1609,7 @@ async function resumeSession(sessionId: string): Promise<void> {
   const loaded = await Session.loadMessages(sessionId, process.cwd());
   session = loaded.session;
   sessionMessages = loaded.messages;
+  sessionOutputTokens = 0;
   persistedSubAgentStatuses.clear();
   await buildAgent();
   await reportSessions(loaded.entries);
@@ -1618,6 +1718,9 @@ async function runPrompt(text: string, sessionText = text): Promise<void> {
 
   running = true;
   cancelled = false;
+  activeOperationCompletion = new Promise<void>((resolve) => {
+    resolveActiveOperation = resolve;
+  });
   activeTurnController = new AbortController();
   post({ type: "status", status: "busy" });
   try {
@@ -1625,10 +1728,16 @@ async function runPrompt(text: string, sessionText = text): Promise<void> {
   } catch (err) {
     fail(err);
   } finally {
-    await refreshSessionAfterTurn();
-    activeTurnController = undefined;
-    running = false;
-    post({ type: "status", status: "ready" });
+    try {
+      await refreshSessionAfterTurn();
+    } finally {
+      activeTurnController = undefined;
+      running = false;
+      post({ type: "status", status: "ready" });
+      resolveActiveOperation?.();
+      resolveActiveOperation = undefined;
+      activeOperationCompletion = undefined;
+    }
   }
 }
 
@@ -1726,6 +1835,9 @@ async function startGoalAuto(maxRounds?: number): Promise<void> {
   const controller = new AbortController();
   autoGoalController = controller;
   autoGoalRunning = true;
+  activeOperationCompletion = new Promise<void>((resolve) => {
+    resolveActiveOperation = resolve;
+  });
   cancelled = false;
   post({ type: "goalAuto", running: true });
   post({ type: "status", status: "busy" });
@@ -1781,6 +1893,9 @@ async function startGoalAuto(maxRounds?: number): Promise<void> {
     autoGoalRunning = false;
     post({ type: "goalAuto", running: false });
     post({ type: "status", status: "ready" });
+    resolveActiveOperation?.();
+    resolveActiveOperation = undefined;
+    activeOperationCompletion = undefined;
   }
 }
 
@@ -1824,6 +1939,10 @@ async function handleGoal(
 async function handle(request: EngineRequest): Promise<void> {
   switch (request.type) {
     case "hello": {
+      if (running || autoGoalRunning) {
+        post({ type: "error", message: "The engine cannot be reinitialized during an active turn." });
+        return;
+      }
       post({ type: "status", status: "starting" });
       const creds = await resolveCredentials();
       apiKey = creds.key;
@@ -1903,7 +2022,12 @@ async function handle(request: EngineRequest): Promise<void> {
     }
 
     case "approvalResponse": {
-      await handleApprovalResponse(request.id, request.decision, request.scope);
+      await handleApprovalResponse(
+        request.id,
+        request.decision,
+        request.scope,
+        request.grantKey,
+      );
       return;
     }
 
@@ -1968,7 +2092,16 @@ async function handle(request: EngineRequest): Promise<void> {
     }
 
     case "reset": {
-      denyAllPending("Session reset; pending approvals were denied.");
+      if (running || autoGoalRunning) {
+        cancelled = true;
+        activeTurnController?.abort();
+        autoGoalController?.abort();
+        browserBridge.failAll("The session was reset while a browser operation was active.");
+        denyAllPending("Session reset; pending approvals were denied.");
+        await activeOperationCompletion;
+      } else {
+        denyAllPending("Session reset; pending approvals were denied.");
+      }
       await startNewSession();
       return;
     }

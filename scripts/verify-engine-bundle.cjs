@@ -21,6 +21,7 @@ if (files.length === 0) {
 }
 
 const externalPackages = new Set();
+const nonLiteralImports = new Set();
 
 for (const file of files) {
   const source = fs.readFileSync(file, "utf8");
@@ -47,13 +48,17 @@ for (const file of files) {
       ts.isStringLiteralLike(node.arguments[0])
     ) {
       specifier = node.arguments[0].text;
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword
+    ) {
+      nonLiteralImports.add(path.relative(engineDirectory, file));
     }
 
     if (
       specifier &&
       !specifier.startsWith(".") &&
       !specifier.startsWith("/") &&
-      specifier !== "electron" &&
       !isBuiltin(specifier)
     ) {
       externalPackages.add(`${path.relative(engineDirectory, file)}: ${specifier}`);
@@ -65,10 +70,38 @@ for (const file of files) {
   inspect(sourceFile);
 }
 
+if (nonLiteralImports.size > 0) {
+  throw new Error(
+    `Engine bundle contains non-literal dynamic imports that cannot be audited:\n${[...nonLiteralImports].sort().join("\n")}`,
+  );
+}
+
 if (externalPackages.size > 0) {
   throw new Error(
     `Engine bundle still imports npm packages at runtime:\n${[...externalPackages].sort().join("\n")}`,
   );
 }
 
-console.log(`Engine bundle verified: ${files.length} ESM file(s), no external npm imports.`);
+const skillRoot = path.join(engineDirectory, "skills", "builtin");
+function countSkillFiles(directory) {
+  if (!fs.existsSync(directory)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) total += countSkillFiles(target);
+    else if (entry.isFile() && entry.name.toLowerCase() === "skill.md") total++;
+  }
+  return total;
+}
+const skillCount = countSkillFiles(skillRoot);
+if (skillCount === 0) {
+  throw new Error(`Engine bundle has no copied builtin skills under ${skillRoot}`);
+}
+
+for (const file of files) {
+  if (/sourceMappingURL\s*=/.test(fs.readFileSync(file, "utf8"))) {
+    throw new Error(`Engine bundle references an unpackaged source map: ${path.relative(engineDirectory, file)}`);
+  }
+}
+
+console.log(`Engine bundle verified: ${files.length} ESM file(s), ${skillCount} builtin skills, no runtime package imports.`);

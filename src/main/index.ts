@@ -20,8 +20,10 @@ import { basename, join, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { BrowserController } from "./browser.js";
 import { createBrowserService } from "./browser-service.js";
+import { startAutoUpdates } from "./update-manager.js";
 import type {
   ApprovalDecision,
   ApprovalScope,
@@ -227,85 +229,54 @@ async function checkGithubRelease(): Promise<void> {
   }
 }
 
-/**
- * Starts automatic installs when a signed update feed is packaged. Unsigned
- * builds still check GitHub and direct the user to the verified release page.
- */
-function startAutoUpdates(): void {
-  if (!app.isPackaged) return;
-
-  const hasUpdateFeed = existsSync(join(process.resourcesPath, "app-update.yml"));
-  const macUpdatesAreSigned =
-    process.platform !== "darwin" || __RUBY_DESKTOP_MAC_AUTO_UPDATES__;
-  if (!hasUpdateFeed || !macUpdatesAreSigned) {
-    setTimeout(() => {
-      void checkGithubRelease().catch((error: unknown) => {
-        console.warn(
-          `[updates] GitHub check failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-    }, 15_000);
-    return;
-  }
-
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  let fallbackScheduled = false;
-  const scheduleGithubFallback = () => {
-    if (fallbackScheduled) return;
-    fallbackScheduled = true;
-    setTimeout(() => {
-      void checkGithubRelease().catch((error: unknown) => {
-        console.warn(
-          `[updates] GitHub fallback failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-    }, 15_000);
-  };
-  autoUpdater.on("error", (error) => {
-    console.error(`[updates] ${error.message}`);
-    scheduleGithubFallback();
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    const options = {
-      type: "info" as const,
-      title: "Ruby Desktop atualizado",
-      message: `A versão ${info.version} foi baixada e está pronta para instalar.`,
-      detail:
-        "Escolha Reiniciar agora para aplicar já, ou Depois para instalar ao encerrar o app.",
-      buttons: ["Reiniciar agora", "Depois"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    };
-    const prompt =
-      mainWindow && !mainWindow.isDestroyed()
-        ? dialog.showMessageBox(mainWindow, options)
-        : dialog.showMessageBox(options);
-    void prompt.then(({ response }) => {
-      if (response === 0) autoUpdater.quitAndInstall();
-    });
-  });
-
-  // A brief delay lets the first window settle before the updater contacts GitHub.
-  setTimeout(() => {
-    void autoUpdater.checkForUpdates().catch((error: unknown) => {
+/** Starts signed automatic updates, with a manual GitHub fallback on failure. */
+function startPackagedUpdates(): void {
+  startAutoUpdates({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    resourcesPath: process.resourcesPath,
+    macAutoUpdatesEnabled: __RUBY_DESKTOP_MAC_AUTO_UPDATES__,
+    hasFile: existsSync,
+    autoUpdater,
+    checkGithubRelease,
+    confirmInstall: async (info) => {
+      const options = {
+        type: "info" as const,
+        title: "Ruby Desktop atualizado",
+        message: `A versão ${info.version} foi baixada e está pronta para instalar.`,
+        detail:
+          "Escolha Reiniciar agora para aplicar já, ou Depois para instalar ao encerrar o app.",
+        buttons: ["Reiniciar agora", "Depois"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      };
+      const result =
+        mainWindow && !mainWindow.isDestroyed()
+          ? await dialog.showMessageBox(mainWindow, options)
+          : await dialog.showMessageBox(options);
+      return result.response === 0;
+    },
+    schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+    onUpdaterError: (error) => {
       console.error(
         `[updates] ${error instanceof Error ? error.message : String(error)}`,
       );
-    });
-  }, 15_000);
+    },
+    onFallbackError: (error) => {
+      console.warn(
+        `[updates] GitHub fallback failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+  });
 }
 
 let mainWindow: BrowserWindow | null = null;
 let engine: Electron.UtilityProcess | null = null;
-/**
- * The last `ready` message, cached so a renderer that mounts after the engine
- * finished starting can still read it. Without this, `getEngineInfo()` would
- * return undefined on every reload and the UI would never learn the model.
- */
-let lastReady: Extract<EngineResponse, { type: "ready" }> | undefined;
+let engineStartPromise: Promise<void> | undefined;
+let engineStopPromise: Promise<void> | undefined;
 let engineBusy = false;
+const approvalModalIds = new Set<string>();
 
 function apiKeyPath(): string {
   return join(app.getPath("userData"), "ruby-api-key.enc");
@@ -333,7 +304,20 @@ function sendToRenderer(message: EngineResponse): void {
  * whether a write stays inside the project, so the engine must actually run *in*
  * the workspace rather than being told about it.
  */
-async function startEngine(): Promise<void> {
+function startEngine(): Promise<void> {
+  if (engine) return Promise.resolve();
+  if (engineStartPromise) return engineStartPromise;
+
+  const start = doStartEngine();
+  let tracked: Promise<void>;
+  tracked = start.finally(() => {
+    if (engineStartPromise === tracked) engineStartPromise = undefined;
+  });
+  engineStartPromise = tracked;
+  return tracked;
+}
+
+async function doStartEngine(): Promise<void> {
   if (engine) return;
 
   const entry = engineEntry();
@@ -364,8 +348,14 @@ async function startEngine(): Promise<void> {
   });
 
   engine.on("message", (message: EngineResponse) => {
-    if (message.type === "ready") lastReady = message;
     if (message.type === "status") engineBusy = message.status === "busy";
+    if (message.type === "approvalRequest") {
+      approvalModalIds.add(message.request.id);
+      applyBrowserBounds();
+    } else if (message.type === "approvalResolved") {
+      approvalModalIds.delete(message.id);
+      applyBrowserBounds();
+    }
     // Browser RPCs are handled here rather than relayed: they are addressed to the
     // main process, and the renderer has no business performing them.
     if (message.type === "browserRequest") {
@@ -385,6 +375,8 @@ async function startEngine(): Promise<void> {
   engine.on("exit", (code: number) => {
     engine = null;
     engineBusy = false;
+    approvalModalIds.clear();
+    applyBrowserBounds();
     sendToRenderer({
       type: "fatal",
       message: `The agent engine stopped unexpectedly (exit code ${code}).`,
@@ -404,22 +396,51 @@ function post(request: EngineRequest): void {
  * The `exit` handler is detached first: it reports an unexpected stop to the UI,
  * and a deliberate restart is not that.
  */
-function stopEngine(): void {
-  if (!engine) return;
-  const current = engine;
-  engine = null;
-  lastReady = undefined;
-  engineBusy = false;
-  current.removeAllListeners("exit");
-  // Give the engine a moment to close its MCP child processes; killing it outright
-  // can orphan them on Windows, where nothing reaps a detached grandchild. The
-  // kill below is the backstop if it does not exit promptly.
-  try {
-    current.postMessage({ type: "shutdown" } satisfies EngineRequest);
-  } catch {
-    // Channel already closed — nothing to ask.
-  }
-  current.kill();
+function stopEngine(): Promise<void> {
+  if (engineStopPromise) return engineStopPromise;
+  const stop = async (): Promise<void> => {
+    // A start may still be reading credentials. Wait for it to either finish or
+    // fail, then shut down the process it created instead of orphaning it.
+    await engineStartPromise?.catch(() => undefined);
+    const current = engine;
+    if (!current) return;
+    engine = null;
+    engineBusy = false;
+    current.removeAllListeners("exit");
+
+    let tracked: Promise<void>;
+    tracked = new Promise<void>((resolveStop) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        current.removeListener("exit", onExit);
+        resolveStop();
+      };
+      const onExit = (): void => finish();
+      const timer = setTimeout(() => {
+        try {
+          current.kill();
+        } catch {
+          // The utility process may already have exited.
+        }
+        finish();
+      }, 2_000);
+      current.once("exit", onExit);
+
+      try {
+        current.postMessage({ type: "shutdown" } satisfies EngineRequest);
+      } catch {
+        // Channel already closed — the timed kill remains the backstop.
+      }
+    });
+    await tracked;
+  };
+
+  let tracked: Promise<void>;
+  tracked = stop().finally(() => {
+    if (engineStopPromise === tracked) engineStopPromise = undefined;
+  });
+  engineStopPromise = tracked;
+  return tracked;
 }
 
 // --- Embedded browser -------------------------------------------------------
@@ -427,6 +448,34 @@ function stopEngine(): void {
 const browser = new BrowserController(() => mainWindow);
 /** Where the renderer says the browser placeholder sits, in window coordinates. */
 let browserBounds = { x: 0, y: 0, width: 0, height: 0 };
+
+function applyBrowserBounds(): void {
+  browserService.setBounds(
+    approvalModalIds.size > 0
+      ? { x: 0, y: 0, width: 0, height: 0 }
+      : browserBounds,
+  );
+}
+
+function clampBrowserBounds(candidate: unknown): typeof browserBounds | undefined {
+  if (!mainWindow || typeof candidate !== "object" || candidate === null) {
+    return undefined;
+  }
+  const raw = candidate as Record<string, unknown>;
+  const values = [raw.x, raw.y, raw.width, raw.height];
+  if (!values.every((value) => typeof value === "number" && Number.isFinite(value))) {
+    return undefined;
+  }
+  const content = mainWindow.getContentBounds();
+  const x = Math.min(content.width, Math.max(0, Math.floor(raw.x as number)));
+  const y = Math.min(content.height, Math.max(0, Math.floor(raw.y as number)));
+  return {
+    x,
+    y,
+    width: Math.min(content.width - x, Math.max(0, Math.floor(raw.width as number))),
+    height: Math.min(content.height - y, Math.max(0, Math.floor(raw.height as number))),
+  };
+}
 
 /** Tells the renderer whether the browser is open, so it can reserve space. */
 function reportBrowserState(): void {
@@ -470,7 +519,7 @@ const browserService = createBrowserService({
  * file and the session all key off it. There is no shared state to leak between
  * workspaces because the process that holds it is replaced.
  */
-function switchWorkspace(next: string): void {
+async function switchWorkspace(next: string): Promise<void> {
   if (typeof next !== "string" || !isDirectory(next)) {
     sendToRenderer({
       type: "error",
@@ -481,12 +530,12 @@ function switchWorkspace(next: string): void {
   const absolute = resolve(next);
   rememberWorkspace(absolute);
   if (workspaceKey(absolute) === workspaceKey(workspace)) return;
-  stopEngine();
+  await stopEngine();
   browser.close();
   workspace = absolute;
   reportBrowserState();
   sendToRenderer({ type: "status", status: "starting" });
-  void startEngine();
+  await startEngine();
 }
 
 function createWindow(): void {
@@ -512,13 +561,39 @@ function createWindow(): void {
 
   mainWindow.on("ready-to-show", () => mainWindow?.show());
 
-  // External links open in the user's browser, never inside the app shell.
+  // Only web links may cross from the untrusted renderer into the OS shell.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        void shell.openExternal(parsed.toString()).catch(() => undefined);
+      }
+    } catch {
+      // Malformed URLs and OS-specific schemes are ignored.
+    }
     return { action: "deny" };
   });
 
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;
+  const rendererFileUrl = pathToFileURL(
+    join(__dirname, "../renderer/index.html"),
+  ).toString();
+  const isTrustedRendererUrl = (url: string): boolean => {
+    try {
+      const candidate = new URL(url);
+      if (devServerUrl) return candidate.origin === new URL(devServerUrl).origin;
+      return candidate.toString() === rendererFileUrl;
+    } catch {
+      return false;
+    }
+  };
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault();
+  });
+  mainWindow.webContents.on("will-redirect", (event, url) => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault();
+  });
+
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
@@ -554,7 +629,6 @@ ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
   return result.canceled ? undefined : result.filePaths[0];
 });
 
-ipcMain.handle(IPC.invoke.getEngineInfo, () => lastReady);
 ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
   if (engineBusy) {
     return { ok: false, error: "Pare o turno atual antes de trocar a chave." };
@@ -575,7 +649,7 @@ ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
       mode: 0o600,
     });
     await rename(temporary, target);
-    stopEngine();
+    await stopEngine();
     await startEngine();
     return { ok: true };
   } catch (err) {
@@ -595,9 +669,14 @@ ipcMain.on(IPC.send.activateSkill, (_event, name: string, args: string) =>
   post({ type: "activateSkill", name, args }),
 );
 ipcMain.on(IPC.send.abort, () => post({ type: "abort" }));
-ipcMain.on(IPC.send.setWorkspace, (_event, path: string) =>
-  switchWorkspace(path),
-);
+ipcMain.on(IPC.send.setWorkspace, (_event, path: string) => {
+  void switchWorkspace(path).catch((error: unknown) => {
+    sendToRenderer({
+      type: "error",
+      message: `Não foi possível trocar de workspace: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  });
+});
 ipcMain.on(IPC.send.setModel, (_event, model: string) =>
   post({ type: "setModel", model }),
 );
@@ -630,7 +709,15 @@ ipcMain.on(
       reasoningEffort?: import("@shared/ipc").ReasoningEffort;
       instructions: string;
     },
-  ) => post({ type: "subAgentConfigResponse", id, action, ...config }),
+  ) =>
+    post({
+      type: "subAgentConfigResponse",
+      id,
+      action,
+      model: config?.model,
+      reasoningEffort: config?.reasoningEffort,
+      instructions: config?.instructions,
+    }),
 );
 ipcMain.on(
   IPC.send.subAgentReviewResponse,
@@ -727,8 +814,10 @@ ipcMain.on(IPC.send.closeBrowser, () => {
 ipcMain.on(
   IPC.send.setBrowserBounds,
   (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-    browserBounds = bounds;
-    browserService.setBounds(browserBounds);
+    const bounded = clampBrowserBounds(bounds);
+    if (!bounded) return;
+    browserBounds = bounded;
+    applyBrowserBounds();
   },
 );
 
@@ -744,7 +833,7 @@ void app.whenReady().then(() => {
     rememberWorkspace(workspace);
     createWindow();
     void startEngine();
-    startAutoUpdates();
+    startPackagedUpdates();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -756,6 +845,14 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  stopEngine();
+let quitAfterEngineShutdown = false;
+app.on("before-quit", (event) => {
+  if (quitAfterEngineShutdown) return;
+  event.preventDefault();
+  quitAfterEngineShutdown = true;
+  void stopEngine()
+    .catch((error: unknown) => {
+      console.error(`[engine] graceful shutdown failed: ${String(error)}`);
+    })
+    .finally(() => app.quit());
 });

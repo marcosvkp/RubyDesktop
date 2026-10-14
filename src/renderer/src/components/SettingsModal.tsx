@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { KeyRound, X } from "lucide-react";
 import { useStore } from "../store";
 
@@ -8,6 +8,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   const save = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();

@@ -225,7 +225,7 @@ export function UserQuestionCard({
               </div>
 
               {question.options.length > 0 ? (
-                <div className="space-y-0.5">
+                <div role={multiple ? "group" : "radiogroup"} aria-label={question.question} className="space-y-0.5">
                   {question.options.map((option) => {
                     const selected = values.includes(option.label);
                     return (
@@ -236,7 +236,6 @@ export function UserQuestionCard({
                         data-testid="user-question-option"
                         role={multiple ? "checkbox" : "radio"}
                         aria-checked={selected}
-                        aria-pressed={selected}
                         onClick={() => selectOption(question, option.label)}
                         className={cn(
                           "flex w-full items-center gap-2.5 rounded-md px-1 py-2 text-left text-xs transition-colors",
@@ -312,7 +311,7 @@ export function UserQuestionCard({
                     onChange={(event) =>
                       setCustomAnswer(question, event.target.value)
                     }
-                    placeholder="Type your answer"
+                    placeholder="Digite sua resposta"
                     aria-label={`Resposta: ${question.question}`}
                     className="min-w-0 flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                   />

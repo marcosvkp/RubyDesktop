@@ -52,6 +52,9 @@ export interface BrowserService {
  */
 export function createBrowserService(deps: BrowserServiceDeps): BrowserService {
   const { controller, screenshotDir, onState } = deps;
+  const methods = new Set<BrowserMethod>([
+    "open", "navigate", "back", "snapshot", "click", "type", "scroll", "screenshot", "close",
+  ]);
 
   let bounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
@@ -71,6 +74,18 @@ export function createBrowserService(deps: BrowserServiceDeps): BrowserService {
     /** Answers the engine for this request. Bound to `id` so no call can forget it. */
     const reply = (ok: boolean, result?: BrowserResult, error?: string): void =>
       deps.reply(id, ok, result, error);
+    const safeState = (): void => {
+      try {
+        onState();
+      } catch {
+        // A destroyed window/tab must not prevent the engine RPC from settling.
+      }
+    };
+
+    if (!methods.has(method)) {
+      reply(false, undefined, `unknown browser method '${String(method)}'`);
+      return;
+    }
 
     try {
       switch (method) {
@@ -143,11 +158,16 @@ export function createBrowserService(deps: BrowserServiceDeps): BrowserService {
           onState();
           return reply(true, { text: "Browser closed." });
         }
+        default:
+          return reply(false, undefined, `unknown browser method '${String(method)}'`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      onState();
-      return reply(false, undefined, message);
+      try {
+        reply(false, undefined, message);
+      } finally {
+        safeState();
+      }
     }
   };
 
@@ -172,7 +192,13 @@ export function createBrowserService(deps: BrowserServiceDeps): BrowserService {
 
     setBounds(next: Bounds): void {
       bounds = next;
-      if (controller.isOpen) controller.setBounds(effectiveBounds());
+      if (controller.isOpen) {
+        controller.setBounds(
+          next.width <= 0 || next.height <= 0
+            ? { x: 0, y: 0, width: 0, height: 0 }
+            : effectiveBounds(),
+        );
+      }
     },
   };
 }

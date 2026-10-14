@@ -25,11 +25,10 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-console.log("[browser] module loading");
 const { runScenario } = require("./smoke-harness.cjs");
 const { createBrowserService } = require("../out/main/browser-service.js");
 const { BrowserController } = require("../out/main/browser.js");
-console.log("[browser] modules loaded");
+const { BrowserBridge } = require("../out/main/browser-bridge.js");
 
 const FIXTURE_DIR = path.join(__dirname, "fixtures", "browser");
 const SHOT = process.env.SMOKE_SCREENSHOT;
@@ -73,21 +72,17 @@ let baseUrl = "";
 let service = null;
 let controller = null;
 let reportBrowserState = () => {};
-/** Engine replies, captured so the test can await them. */
-const replies = new Map();
-let replySeq = 0;
+/** Engine-side adapter connected to the real main-process browser service. */
+let bridge = null;
+let smokeApi = null;
+const engineRpcIds = new Set();
+const engineBrowserMethods = [];
+const engineToolResults = [];
 
 /** Calls a browser method the way the engine would, and returns its result. */
 function callBrowser(method, params) {
-  const id = `t${++replySeq}`;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${method} never answered`)),
-      30_000,
-    );
-    replies.set(id, { resolve, reject, timer });
-    void service.handle(id, method, params);
-  });
+  if (!bridge) return Promise.reject(new Error("browser bridge is not ready"));
+  return bridge.call(method, params);
 }
 
 runScenario({
@@ -101,6 +96,7 @@ runScenario({
   showWindow: true,
   hooks: {
     async onReady(_ready, api) {
+      smokeApi = api;
       try {
         await runBrowserChecks(api);
       } catch (err) {
@@ -110,11 +106,55 @@ runScenario({
         );
       }
     },
+    onBrowserRequest(message, api) {
+      engineRpcIds.add(message.id);
+      engineBrowserMethods.push(message.method);
+      void service.handle(message.id, message.method, message.params);
+    },
+    onEvent(event) {
+      if (event.type === "tool_result") engineToolResults.push(event);
+    },
+    onIdle(_state, api) {
+      const usedSnapshot = engineBrowserMethods.includes("snapshot");
+      const receivedToolResult = engineToolResults.some(
+        (event) => event.name === "browser_snapshot" && event.result.includes("Greet me"),
+      );
+      if (!usedSnapshot || !receivedToolResult) {
+        return api.finish(
+          1,
+          `utility-process browser RPC was not completed; requests=${engineBrowserMethods.join(",")}, results=${engineToolResults.length}`,
+        );
+      }
+      api.finish(0, "browser service, CDP, and engine↔main browser RPC verified");
+    },
   },
 });
 
 async function runBrowserChecks(api) {
   api.log(`fixture server: ${baseUrl}`);
+
+  // The RPC must fail promptly and with a useful error for unrecognized methods;
+  // silently omitting a reply leaves the engine waiting for its full timeout.
+  const unknownStartedAt = Date.now();
+  let unknownMethodRejected = false;
+  try {
+    await callBrowser("not_a_browser_method", {});
+  } catch (err) {
+    unknownMethodRejected = /unknown browser method/.test(err.message);
+  }
+  if (!unknownMethodRejected || Date.now() - unknownStartedAt > 1_000) {
+    throw new Error("unknown browser RPC did not reply promptly with a useful error");
+  }
+  api.log("unknown browser RPC rejected promptly");
+
+  let fileUrlRejected = false;
+  try {
+    await callBrowser("navigate", { url: "file:///C:/Windows/win.ini" });
+  } catch (err) {
+    fileUrlRejected = /only http and https are allowed/.test(err.message);
+  }
+  if (!fileUrlRejected) throw new Error("browser accepted a file:// URL");
+  api.log("file:// navigation rejected");
 
   // 1. Open the page.
   const opened = await callBrowser("open", { url: baseUrl });
@@ -320,10 +360,14 @@ async function runBrowserChecks(api) {
     }
   }
 
-  api.finish(
-    0,
-    "navigate, type, click, back, scroll and screenshot all verified",
+  // Exercise the actual utilityProcess -> browserRequest -> main service ->
+  // browserResult path after the deterministic CDP checks above.
+  const rpcPrompt = await api.type(
+    "Use browser_snapshot exactly once to inspect the currently open page. Do not use other tools. Reply with its page title.",
   );
+  if (rpcPrompt !== "sent") {
+    throw new Error(`could not start the engine browser RPC turn: ${rpcPrompt}`);
+  }
 }
 
 /** Wires the service and the fixture server before the harness starts the engine. */
@@ -356,6 +400,9 @@ function attachService() {
   controller = new BrowserController(
     () => BrowserWindow.getAllWindows()[0] ?? null,
   );
+  bridge = new BrowserBridge((id, method, params) => {
+    void service.handle(id, method, params);
+  });
   reportBrowserState = () => {
     const info = controller.info();
     existing.webContents.send("ruby:engine-message", {
@@ -372,12 +419,17 @@ function attachService() {
     screenshotDir: SHOT_DIR,
     onState: reportBrowserState,
     reply: (id, ok, result, error) => {
-      const pending = replies.get(id);
-      if (!pending) return;
-      replies.delete(id);
-      clearTimeout(pending.timer);
-      if (ok) pending.resolve(result);
-      else pending.reject(new Error(error));
+      if (engineRpcIds.delete(id)) {
+        smokeApi?.engine?.postMessage({
+          type: "browserResult",
+          id,
+          ok,
+          ...(result ? { result } : {}),
+          ...(error ? { error } : {}),
+        });
+        return;
+      }
+      bridge?.resolve(id, ok, result, error);
     },
     defaultBounds: () => {
       const { width, height } = existing.getContentBounds();

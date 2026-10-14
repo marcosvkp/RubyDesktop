@@ -13,9 +13,10 @@
 const { app, BrowserWindow, ipcMain, utilityProcess } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const IPC = require("../src/shared/ipc-channels.json");
 
 const OUT = path.join(__dirname, "..", "out");
-const CHANNEL = "ruby:engine-message";
+const CHANNEL = IPC.engineMessage;
 
 /**
  * Boots the engine and the renderer, then hands control to `hooks`.
@@ -48,6 +49,15 @@ function runScenario({
   let engine = null;
   let win = null;
   let finished = false;
+  const registeredChannels = new Set();
+  const registerInvoke = (channel, handler) => {
+    registeredChannels.add(channel);
+    ipcMain.handle(channel, handler);
+  };
+  const registerSend = (channel, listener) => {
+    registeredChannels.add(channel);
+    ipcMain.on(channel, listener);
+  };
 
   const state = {
     sawReady: false,
@@ -188,7 +198,6 @@ function runScenario({
       // these tests verify, and handling a message before delivering it meant a
       // screenshot could be captured with the stream still marked open.
       if (win && !win.isDestroyed()) win.webContents.send(CHANNEL, message);
-
       try {
         await hooks.onMessage?.(message, api);
 
@@ -278,35 +287,40 @@ function runScenario({
 
   app.whenReady().then(async () => {
     // The two invoke handlers the renderer calls on mount.
-    ipcMain.handle("ruby:get-workspace", () => workspace);
-    ipcMain.handle("ruby:get-recent-workspaces", () => []);
-    ipcMain.handle("ruby:get-engine-info", () => undefined);
-    ipcMain.handle("ruby:pick-workspace", () => undefined);
-    ipcMain.handle("ruby:save-api-key", async () => ({
+    registerInvoke(IPC.invoke.getWorkspace, () => workspace);
+    registerInvoke(IPC.invoke.getRecentWorkspaces, () => [{
+      path: workspace,
+      label: path.basename(workspace),
+    }]);
+    registerInvoke(IPC.invoke.pickWorkspace, () => undefined);
+    registerInvoke(IPC.invoke.saveApiKey, async () => ({
       ok: false,
       error: "Unavailable in smoke harness.",
     }));
 
     // The fire-and-forget channels, mirroring src/main/index.ts. A channel missing
     // here would make the smoke test pass while the real app was broken.
-    ipcMain.on("ruby:prompt", (_e, text) =>
+    registerSend(IPC.send.prompt, (_e, text) =>
       engine?.postMessage({ type: "prompt", text }),
     );
-    ipcMain.on("ruby:activate-skill", (_e, name, args) =>
+    registerSend(IPC.send.activateSkill, (_e, name, args) =>
       engine?.postMessage({ type: "activateSkill", name, args }),
     );
-    ipcMain.on("ruby:abort", () => engine?.postMessage({ type: "abort" }));
-    ipcMain.on("ruby:set-workspace", () => {});
-    ipcMain.on("ruby:new-browser-tab", () => {});
-    ipcMain.on("ruby:select-browser-tab", () => {});
-    ipcMain.on("ruby:close-browser-tab", () => {});
-    ipcMain.on("ruby:set-model", (_e, model) =>
+    registerSend(IPC.send.abort, () => engine?.postMessage({ type: "abort" }));
+    registerSend(IPC.send.setWorkspace, () => {});
+    registerSend(IPC.send.openBrowser, (_e, url) => hooks.onOpenBrowser?.(url, api));
+    registerSend(IPC.send.closeBrowser, () => hooks.onCloseBrowser?.(api));
+    registerSend(IPC.send.setBrowserBounds, (_e, bounds) => hooks.onBrowserBounds?.(bounds, api));
+    registerSend(IPC.send.newBrowserTab, (_e, url) => hooks.onNewBrowserTab?.(url, api));
+    registerSend(IPC.send.selectBrowserTab, (_e, id) => hooks.onSelectBrowserTab?.(id, api));
+    registerSend(IPC.send.closeBrowserTab, (_e, id) => hooks.onCloseBrowserTab?.(id, api));
+    registerSend(IPC.send.setModel, (_e, model) =>
       engine?.postMessage({ type: "setModel", model }),
     );
-    ipcMain.on("ruby:set-permission-mode", (_e, mode) =>
+    registerSend(IPC.send.setPermissionMode, (_e, mode) =>
       engine?.postMessage({ type: "setPermissionMode", mode }),
     );
-    ipcMain.on("ruby:approval-response", (_e, id, decision, scope, grantKey) =>
+    registerSend(IPC.send.approvalResponse, (_e, id, decision, scope, grantKey) =>
       engine?.postMessage({
         type: "approvalResponse",
         id,
@@ -315,67 +329,76 @@ function runScenario({
         grantKey,
       }),
     );
-    ipcMain.on("ruby:user-question-response", (_e, id, answers) =>
+    registerSend(IPC.send.userQuestionResponse, (_e, id, answers) =>
       engine?.postMessage({ type: "userQuestionResponse", id, answers }),
     );
-    ipcMain.on("ruby:sub-agent-config-response", (_e, id, action, config) =>
+    registerSend(IPC.send.subAgentConfigResponse, (_e, id, action, config) =>
       engine?.postMessage({
         type: "subAgentConfigResponse",
         id,
         action,
-        ...config,
+        model: config?.model,
+        reasoningEffort: config?.reasoningEffort,
+        instructions: config?.instructions,
       }),
     );
-    ipcMain.on("ruby:sub-agent-review-response", (_e, id, action) =>
+    registerSend(IPC.send.subAgentReviewResponse, (_e, id, action) =>
       engine?.postMessage({ type: "subAgentReviewResponse", id, action }),
     );
-    ipcMain.on("ruby:compact", () => engine?.postMessage({ type: "compact" }));
-    ipcMain.on("ruby:new-session", () =>
+    registerSend(IPC.send.compact, () => engine?.postMessage({ type: "compact" }));
+    registerSend(IPC.send.newSession, () =>
       engine?.postMessage({ type: "session", action: "new" }),
     );
-    ipcMain.on("ruby:resume-session", (_e, sessionId) =>
+    registerSend(IPC.send.resumeSession, (_e, sessionId) =>
       engine?.postMessage({ type: "session", action: "resume", sessionId }),
     );
-    ipcMain.on("ruby:get-goal", () =>
+    registerSend(IPC.send.getGoal, () =>
       engine?.postMessage({ type: "goal", action: "get" }),
     );
-    ipcMain.on("ruby:set-goal", (_e, text) =>
+    registerSend(IPC.send.setGoal, (_e, text) =>
       engine?.postMessage({ type: "goal", action: "set", text }),
     );
-    ipcMain.on("ruby:note-goal", (_e, text) =>
+    registerSend(IPC.send.noteGoal, (_e, text) =>
       engine?.postMessage({ type: "goal", action: "note", text }),
     );
-    ipcMain.on("ruby:set-goal-status", (_e, status) =>
+    registerSend(IPC.send.setGoalStatus, (_e, status) =>
       engine?.postMessage({ type: "goal", action: "status", status }),
     );
-    ipcMain.on("ruby:set-goal-max-rounds", (_e, maxRounds) =>
+    registerSend(IPC.send.setGoalMaxRounds, (_e, maxRounds) =>
       engine?.postMessage({ type: "goal", action: "maxRounds", maxRounds }),
     );
-    ipcMain.on("ruby:start-auto-goal", (_e, maxRounds) =>
+    registerSend(IPC.send.startAutoGoal, (_e, maxRounds) =>
       engine?.postMessage({ type: "goal", action: "auto", maxRounds }),
     );
-    ipcMain.on("ruby:stop-auto-goal", () =>
+    registerSend(IPC.send.stopAutoGoal, () =>
       engine?.postMessage({ type: "goal", action: "stopAuto" }),
     );
-    ipcMain.on("ruby:clear-goal", () =>
+    registerSend(IPC.send.clearGoal, () =>
       engine?.postMessage({ type: "goal", action: "clear" }),
     );
-    ipcMain.on("ruby:refresh-mcp", () =>
+    registerSend(IPC.send.refreshMcp, () =>
       engine?.postMessage({ type: "mcp", action: "refresh" }),
     );
-    ipcMain.on("ruby:add-mcp-server", (_e, name, config) =>
+    registerSend(IPC.send.addMcpServer, (_e, name, config) =>
       engine?.postMessage({ type: "mcp", action: "add", name, config }),
     );
-    ipcMain.on("ruby:remove-mcp-server", (_e, name) =>
+    registerSend(IPC.send.removeMcpServer, (_e, name) =>
       engine?.postMessage({ type: "mcp", action: "remove", name }),
     );
-    ipcMain.on("ruby:test-mcp-server", (_e, name, config) =>
+    registerSend(IPC.send.testMcpServer, (_e, name, config) =>
       engine?.postMessage({ type: "mcp", action: "test", name, config }),
     );
-    ipcMain.on("ruby:reset", () => engine?.postMessage({ type: "reset" }));
-    ipcMain.on("ruby:refresh-models", () =>
+    registerSend(IPC.send.reset, () => engine?.postMessage({ type: "reset" }));
+    registerSend(IPC.send.refreshModels, () =>
       engine?.postMessage({ type: "hello" }),
     );
+    const missingChannels = [
+      ...Object.values(IPC.invoke),
+      ...Object.values(IPC.send),
+    ].filter((channel) => !registeredChannels.has(channel));
+    if (missingChannels.length > 0) {
+      throw new Error(`Smoke harness does not register IPC channels: ${missingChannels.join(", ")}`);
+    }
 
     win = new BrowserWindow({
       width: 1440,
