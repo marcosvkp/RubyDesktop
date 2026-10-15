@@ -518,6 +518,26 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
     if (entry.type === "user") {
       items.push({ kind: "user", id: nextId(), text: entry.content });
     } else if (entry.type === "assistant") {
+      // activate_skill is handled inside the engine and, unlike regular tools,
+      // does not emit a tool_result event. A following assistant message proves
+      // the activation call returned; close it here when replaying older logs.
+      const pendingSkills = toolCallsByName.get("activate_skill") ?? [];
+      for (const call of pendingSkills) {
+        const index = items.findIndex(
+          (item) => item.kind === "tool" && item.id === call.id,
+        );
+        const item = index >= 0 ? items[index] : undefined;
+        if (item?.kind !== "tool" || item.status !== "running") continue;
+        const name = isRecord(item.args) && typeof item.args.name === "string"
+          ? item.args.name
+          : "skill";
+        items[index] = {
+          ...item,
+          result: `Skill ativada: ${name}`,
+          status: "ok",
+        };
+      }
+      toolCallsByName.delete("activate_skill");
       items.push({
         kind: "assistant",
         id: nextId(),
@@ -1180,9 +1200,29 @@ export const useStore = create<State>((set, get) => ({
             return;
 
           case "skill_activated":
-            set((s) => ({
-              items: notice(s.items, `Skill ativada: ${event.name}`),
-            }));
+            set((s) => {
+              const items = [...s.items];
+              for (let i = items.length - 1; i >= 0; i--) {
+                const item = items[i];
+                if (
+                  item.kind === "tool" &&
+                  item.name === "activate_skill" &&
+                  item.status === "running" &&
+                  isRecord(item.args) &&
+                  item.args.name === event.name
+                ) {
+                  items[i] = {
+                    ...item,
+                    result: `Skill ativada: ${event.name}`,
+                    status: "ok",
+                  };
+                  break;
+                }
+              }
+              return {
+                items: notice(items, `Skill ativada: ${event.name}`),
+              };
+            });
             return;
 
           case "notice":
