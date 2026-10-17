@@ -2,12 +2,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Eye, Search, Sparkles } from "lucide-react";
 import { useStore } from "../store";
 import { cn, formatTokens } from "../lib/utils";
-import type { ModelSummary } from "@shared/ipc";
+import type { ModelSummary, ReasoningEffort } from "@shared/ipc";
+
+const REASONING_OPTIONS: {
+  value?: ReasoningEffort;
+  label: string;
+  wireValue: string;
+}[] = [
+  { label: "Automático", wireValue: "Padrão do modelo" },
+  { value: "none", label: "Desligado", wireValue: "none · off" },
+  { value: "minimal", label: "Mínimo", wireValue: "minimal · minimum" },
+  { value: "low", label: "Baixo", wireValue: "low" },
+  { value: "medium", label: "Médio", wireValue: "medium" },
+  { value: "high", label: "Alto", wireValue: "high" },
+  { value: "xhigh", label: "Extra-alto", wireValue: "xhigh · extra-high" },
+  { value: "max", label: "Máximo", wireValue: "max · maximum" },
+];
 
 /** Model switcher placed beside the composer send control. */
 export function ModelPicker(): React.JSX.Element {
   const models = useStore((s) => s.models);
   const model = useStore((s) => s.model);
+  const reasoningEffort = useStore((s) => s.reasoningEffort);
   const selectModel = useStore((s) => s.selectModel);
   const status = useStore((s) => s.status);
   const busy = useStore((s) => s.busy);
@@ -18,12 +34,15 @@ export function ModelPicker(): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const selected = models.find((entry) => entry.id === model);
-  const disabled = busy || compacting || queueCommandPending || status !== "ready" || models.length === 0;
+  const disabled =
+    busy || compacting || queueCommandPending || status !== "ready" || models.length === 0;
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return models;
-    return models.filter((entry) => `${entry.label} ${entry.id}`.toLocaleLowerCase().includes(needle));
+    return models.filter((entry) =>
+      `${entry.label} ${entry.id}`.toLocaleLowerCase().includes(needle),
+    );
   }, [models, query]);
 
   useEffect(() => {
@@ -56,7 +75,11 @@ export function ModelPicker(): React.JSX.Element {
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={busy || compacting || queueCommandPending ? "Aguarde o fim da ação atual para trocar de modelo" : "Trocar modelo"}
+        title={
+          busy || compacting || queueCommandPending
+            ? "Aguarde o fim da ação atual para trocar de modelo"
+            : "Trocar modelo ou esforço de raciocínio"
+        }
         className={cn(
           "flex max-w-[230px] items-center gap-2 rounded-lg border border-line bg-background/70 px-3 py-2 text-xs transition-colors",
           "hover:border-primary/40 hover:bg-white/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -65,20 +88,38 @@ export function ModelPicker(): React.JSX.Element {
       >
         <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
         <span className="truncate font-medium text-foreground">{label}</span>
-        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+        {selected?.reasoningEfforts?.length ? (
+          <span
+            className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary"
+            title="Esforço de raciocínio"
+          >
+            {reasoningEffort
+              ? REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ??
+                reasoningEffort
+              : "Auto"}
+          </span>
+        ) : null}
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180",
+          )}
+        />
       </button>
 
       {open ? (
         <div
           role="dialog"
           aria-label="Selecionar modelo"
-          className="absolute right-0 bottom-full z-50 mb-3 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-line bg-popover text-popover-foreground shadow-2xl shadow-black/50 ring-1 ring-white/5"
+          className="absolute right-0 bottom-full z-50 mb-3 max-h-[min(80vh,42rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-line bg-popover text-popover-foreground shadow-2xl shadow-black/50 ring-1 ring-white/5"
         >
           <div className="border-b border-line p-3">
             <div className="mb-2 flex items-center justify-between">
               <div>
                 <p className="text-sm font-semibold">Modelo</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">Escolha o modelo para as próximas mensagens</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  Escolha o modelo para as próximas mensagens
+                </p>
               </div>
               <span className="rounded-full border border-line bg-background px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
                 {models.length}
@@ -96,7 +137,11 @@ export function ModelPicker(): React.JSX.Element {
             </label>
           </div>
 
-          <div role="listbox" aria-label="Modelos disponíveis" className="max-h-72 overflow-y-auto p-1.5">
+          <div
+            role="listbox"
+            aria-label="Modelos disponíveis"
+            className="max-h-56 overflow-y-auto p-1.5"
+          >
             {filtered.length > 0 ? (
               filtered.map((entry) => (
                 <ModelOption
@@ -110,9 +155,65 @@ export function ModelPicker(): React.JSX.Element {
                 />
               ))
             ) : (
-              <p className="px-3 py-6 text-center text-xs text-muted-foreground">Nenhum modelo encontrado.</p>
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                Nenhum modelo encontrado.
+              </p>
             )}
           </div>
+          {selected?.reasoningEfforts?.length ? (
+            <div className="border-t border-line p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold">Esforço de raciocínio</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    Automático usa o padrão do modelo
+                  </p>
+                </div>
+                <span className="rounded-full border border-line px-2 py-0.5 text-[9px] text-muted-foreground">
+                  {reasoningEffort
+                    ? REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label
+                    : "Automático"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {REASONING_OPTIONS.map((option) => {
+                  const active = option.value === reasoningEffort;
+                  const supported =
+                    option.value === undefined ||
+                    selected.reasoningEfforts?.includes(option.value) === true;
+                  return (
+                    <button
+                      key={option.wireValue}
+                      type="button"
+                      aria-pressed={active}
+                      title={
+                        supported
+                          ? option.wireValue
+                          : `Este modelo não anuncia suporte a ${option.wireValue}`
+                      }
+                      onClick={() => selectModel(selected.id, option.value)}
+                      disabled={disabled || !supported}
+                      className={cn(
+                        "min-h-9 rounded-md border px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                        !supported
+                          ? "cursor-not-allowed border-line/60 bg-background/30 text-muted-foreground/45"
+                          : active
+                          ? "border-primary/50 bg-primary/10 text-foreground"
+                          : "border-line bg-background/60 text-muted-foreground hover:border-primary/30 hover:text-foreground",
+                      )}
+                    >
+                      <span className="block truncate text-[10px] font-medium">{option.label}</span>
+                      <span className="block truncate font-mono text-[9px] opacity-70">{option.wireValue}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : selected?.supportsReasoning ? (
+            <div className="border-t border-line px-3 py-2 text-[10px] text-muted-foreground">
+              Este modelo tem raciocínio nativo, mas não publica níveis ajustáveis.
+            </div>
+          ) : null}
           <div className="border-t border-line px-3 py-2 text-[10px] text-muted-foreground">
             A troca fica disponível quando o turno terminar.
           </div>
@@ -142,7 +243,14 @@ function ModelOption({
         selected ? "bg-primary/10 text-foreground" : "hover:bg-white/[0.045]",
       )}
     >
-      <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md border", selected ? "border-primary/30 bg-primary/10 text-primary" : "border-line bg-background text-muted-foreground")}>
+      <span
+        className={cn(
+          "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+          selected
+            ? "border-primary/30 bg-primary/10 text-primary"
+            : "border-line bg-background text-muted-foreground",
+        )}
+      >
         {selected ? <Check className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
       </span>
       <span className="min-w-0 flex-1">

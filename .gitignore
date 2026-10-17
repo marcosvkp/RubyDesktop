@@ -12,3 +12,4 @@ release/
 .build-cache-*
 out/*.png
 browser-out.txt
+.rubycli/tmp/

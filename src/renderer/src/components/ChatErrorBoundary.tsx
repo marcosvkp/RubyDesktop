@@ -43,6 +43,8 @@ function RawTranscriptFallback({ error }: { error: Error }): React.JSX.Element {
             ? item.text
             : item.kind === "tool"
               ? `${item.name}\n${item.result ?? "em andamento"}`
+              : item.kind === "todo-list"
+                ? `Tarefas\n${item.items.map((task) => `[${task.status}] ${task.text}`).join("\n")}`
               : item.kind === "subagent" || item.kind === "subagent-config"
                 ? item.kind === "subagent" ? `${item.agent.title}: ${item.agent.output ?? item.agent.progress}` : `Sub-agente: ${item.request.title}`
                 : `Pergunta: ${item.request.title}`;

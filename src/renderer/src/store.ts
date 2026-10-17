@@ -39,6 +39,12 @@ export type ChatItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   | {
+      kind: "todo-list";
+      id: "todo-list";
+      items: TodoTask[];
+      toolCalls: number;
+    }
+  | {
       kind: "tool";
       id: string;
       callId?: string;
@@ -67,6 +73,12 @@ export type ChatItem =
       };
     }
   | { kind: "subagent"; id: string; agent: SubAgentSummary };
+
+export interface TodoTask {
+  id: string;
+  text: string;
+  status: "pending" | "in_progress" | "done";
+}
 
 export interface SessionUsageStats {
   llmCalls: number;
@@ -147,6 +159,7 @@ function accumulateSessionUsage(
 interface EngineInfo {
   workspace: string;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   toolCount: number;
   skillCount: number;
   keySource: string;
@@ -158,6 +171,7 @@ interface State {
   engine?: EngineInfo;
   models: ModelSummary[];
   model: string;
+  reasoningEffort?: ReasoningEffort;
   status: EngineStatus;
   items: ChatItem[];
   queuedMessages: QueuedMessage[];
@@ -207,7 +221,7 @@ interface State {
   drainQueue: () => void;
   activateSkill: (name: string, args: string) => void;
   abort: () => void;
-  selectModel: (model: string) => void;
+  selectModel: (model: string, reasoningEffort?: ReasoningEffort) => void;
   setPermissionMode: (mode: PermissionMode) => void;
   respondApproval: (
     decision: ApprovalDecision,
@@ -293,8 +307,54 @@ function countChatItems(items: ChatItem[]): { turnCount: number; stepCount: numb
   for (const item of items) {
     if (item.kind === "user" && !item.text.trimStart().startsWith("/")) turnCount++;
     else if (item.kind === "tool") stepCount++;
+    else if (item.kind === "todo-list") stepCount += item.toolCalls;
   }
   return { turnCount, stepCount };
+}
+
+function parseTodoItems(args: unknown): TodoTask[] | undefined {
+  if (!isRecord(args) || !Array.isArray(args.items) || args.items.length > 100)
+    return undefined;
+  const parsed: TodoTask[] = [];
+  for (const value of args.items) {
+    if (
+      !isRecord(value) ||
+      typeof value.id !== "string" ||
+      typeof value.text !== "string" ||
+      (value.status !== "pending" &&
+        value.status !== "in_progress" &&
+        value.status !== "done")
+    )
+      return undefined;
+    parsed.push({
+      id: value.id.slice(0, 100),
+      text: value.text.slice(0, 1000),
+      status: value.status,
+    });
+  }
+  return parsed;
+}
+
+/** Keeps the latest full todo_write snapshot while counting hidden todo tool calls. */
+function recordTodoCall(
+  chatItems: ChatItem[],
+  replacement?: TodoTask[],
+): ChatItem[] {
+  const index = chatItems.findIndex(
+    (item) => item.kind === "todo-list" && item.id === "todo-list",
+  );
+  const current = index >= 0 ? chatItems[index] : undefined;
+  const todoItem: ChatItem = {
+    kind: "todo-list",
+    id: "todo-list",
+    items:
+      replacement ?? (current?.kind === "todo-list" ? current.items : []),
+    toolCalls: (current?.kind === "todo-list" ? current.toolCalls : 0) + 1,
+  };
+  if (index < 0) return [...chatItems, todoItem];
+  return chatItems.map((item, itemIndex) =>
+    itemIndex === index ? todoItem : item,
+  );
 }
 
 /** Appends an informational or error notice. */
@@ -564,6 +624,14 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
     } else if (entry.type === "tool_call") {
       // `think` is a private scratchpad. Keep it out of both live and restored UI.
       if (entry.name === "think" || entry.name === "report_progress") continue;
+      if (entry.name === "todo_write") {
+        items.splice(0, items.length, ...recordTodoCall(items, parseTodoItems(entry.args)));
+        continue;
+      }
+      if (entry.name === "todo_read") {
+        items.splice(0, items.length, ...recordTodoCall(items));
+        continue;
+      }
       const id = nextId();
       const calls = toolCallsByName.get(entry.name) ?? [];
       calls.push({
@@ -956,6 +1024,7 @@ export const useStore = create<State>((set, get) => ({
   recentWorkspaces: [],
   models: [],
   model: "",
+  reasoningEffort: undefined,
   status: "starting",
   items: [],
   queuedMessages: [],
@@ -989,12 +1058,14 @@ export const useStore = create<State>((set, get) => ({
           engine: {
             workspace: message.workspace,
             model: message.model,
+            reasoningEffort: message.reasoningEffort,
             toolCount: message.toolCount,
             skillCount: message.skillCount,
             keySource: message.keySource,
           },
           workspace: message.workspace,
           model: message.model,
+          reasoningEffort: message.reasoningEffort,
           skills: message.skills,
           permissionMode: message.permissionMode,
           ...(switched
@@ -1022,6 +1093,20 @@ export const useStore = create<State>((set, get) => ({
 
       case "models":
         set({ models: message.models });
+        return;
+
+      case "modelSelection":
+        set((s) => ({
+          model: message.model,
+          reasoningEffort: message.reasoningEffort,
+          engine: s.engine
+            ? {
+                ...s.engine,
+                model: message.model,
+                reasoningEffort: message.reasoningEffort,
+              }
+            : undefined,
+        }));
         return;
 
       case "skills":
@@ -1282,6 +1367,17 @@ export const useStore = create<State>((set, get) => ({
               }));
               return;
             }
+            if (event.name === "todo_write" || event.name === "todo_read") {
+              const todos =
+                event.name === "todo_write"
+                  ? parseTodoItems(event.args)
+                  : undefined;
+              set((s) => ({
+                stepCount: s.stepCount + 1,
+                items: recordTodoCall(closeStreaming(s.items), todos),
+              }));
+              return;
+            }
             set((s) => ({
               stepCount: s.stepCount + 1,
               items: [
@@ -1300,6 +1396,7 @@ export const useStore = create<State>((set, get) => ({
 
           case "tool_result":
             if (event.name === "think" || event.name === "report_progress") return;
+            if (event.name === "todo_write" || event.name === "todo_read") return;
             set((s) => {
               // Provider IDs pair results with their exact call; retain the name/FIFO
               // fallback for older engines that do not emit IDs.
@@ -1468,9 +1565,8 @@ export const useStore = create<State>((set, get) => ({
 
   abort: () => window.ruby.abort(),
 
-  selectModel: (model) => {
-    set({ model });
-    window.ruby.setModel(model);
+  selectModel: (model, reasoningEffort) => {
+    window.ruby.setModel(model, reasoningEffort);
   },
 
   setPermissionMode: (mode) => {

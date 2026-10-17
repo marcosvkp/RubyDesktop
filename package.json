@@ -1,6 +1,6 @@
 {
   "name": "ruby-desktop",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Ruby Desktop — app desktop de agentes conectado ao provider Ruby.",
   "author": "RubyCLI",
   "license": "MIT",

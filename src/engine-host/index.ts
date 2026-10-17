@@ -153,6 +153,8 @@ function getSkillSummaries(): SkillSummary[] {
 // --- Session state ----------------------------------------------------------
 
 let model = DEFAULT_MODEL;
+let configuredModel = DEFAULT_MODEL;
+let reasoningEffort: ReasoningEffort | undefined;
 let baseUrl = DEFAULT_BASE_URL;
 let apiKey = "";
 let keySource = "unknown";
@@ -1163,6 +1165,9 @@ async function runSubAgent(
       includeUsage: true,
       provider: selectedProvider,
       baseUrl,
+      supportsReasoningEffort: Boolean(
+        modelCatalog.find((entry) => entry.id === config.model)?.reasoningEfforts?.length,
+      ),
       ...(config.reasoningEffort
         ? { reasoningEffort: config.reasoningEffort }
         : {}),
@@ -1457,6 +1462,10 @@ async function buildAgent(): Promise<void> {
     includeUsage: true,
     provider,
     baseUrl,
+    supportsReasoningEffort: Boolean(
+      modelCatalog.find((entry) => entry.id === model)?.reasoningEfforts?.length,
+    ),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   });
 
   const config = await loadConfig();
@@ -1544,7 +1553,12 @@ async function buildAgent(): Promise<void> {
     // model name, and the client it was handed does not expose one. Omitting it
     // silently falls back to 100k, which would make auto-compaction fire at 75k
     // instead of 75% of the model's real window.
-    { model, provider, onObservability },
+    {
+      model,
+      provider,
+      onObservability,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    },
   );
 
   if (session) {
@@ -1578,27 +1592,101 @@ async function reportModels(): Promise<void> {
       const supportsEffort =
         m.supports_reasoning &&
         (modelProvider === "rubycli" || modelProvider === "openai");
+      const advertisedEfforts = m.reasoning_efforts ?? m.reasoningEfforts;
+      const reasoningEfforts: ReasoningEffort[] = supportsEffort
+        ? Array.isArray(advertisedEfforts)
+          ? advertisedEfforts
+              .map(normalizeReasoningEffort)
+              .filter((effort): effort is ReasoningEffort => effort !== undefined)
+          : ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        : [];
       return {
         id: m.id,
         label: m.display_name ?? m.id,
         contextWindow: remoteContextWindow(m),
         supportsReasoning: m.supports_reasoning,
-        reasoningEfforts: supportsEffort ? ["low", "medium", "high"] : [],
+        reasoningEfforts,
         supportsVision: m.supports_vision,
       };
     });
   modelCatalog = summaries;
   post({ type: "models", models: summaries });
 
-  // If the configured model is not in this account's catalog, fall back to the
-  // first entry rather than failing on the first turn with a 404.
-  if (summaries.length > 0 && !summaries.some((m) => m.id === model)) {
-    post({
-      type: "error",
-      message: `Model '${model}' is not available for this key; using '${summaries[0].id}'.`,
-    });
-    model = summaries[0].id;
+  // Keep a Desktop selection across engine restarts. If it vanished from the
+  // account catalog, fall back to the configured model, then RubySmart, then the
+  // first available entry. The main process saves this resolved ID after ready.
+  if (summaries.length > 0) {
+    const desktopPreference = process.env.RUBY_DESKTOP_PREFERRED_MODEL?.trim();
+    const available = new Set(summaries.map((entry) => entry.id));
+    const fallback = [configuredModel, DEFAULT_MODEL].find((candidate) =>
+      available.has(candidate),
+    );
+    model =
+      (desktopPreference && available.has(desktopPreference)
+        ? desktopPreference
+        : undefined) ??
+      fallback ??
+      summaries[0].id;
+
+    const requestedEffort = parseReasoningEffort(
+      process.env.RUBY_DESKTOP_PREFERRED_REASONING_EFFORT,
+    );
+    const selectedModel = summaries.find((entry) => entry.id === model);
+    reasoningEffort =
+      requestedEffort && selectedModel?.reasoningEfforts?.includes(requestedEffort)
+        ? requestedEffort
+        : undefined;
+    if (process.env.RUBY_DESKTOP_PREFERRED_REASONING_EFFORT && !reasoningEffort) {
+      post({
+        type: "error",
+        message: `O effort salvo não está disponível para '${model}'. Usando o padrão do modelo.`,
+      });
+    }
+
+    if (desktopPreference && !available.has(desktopPreference)) {
+      post({
+        type: "error",
+        message: `O modelo salvo '${desktopPreference}' não está disponível para esta chave. Usando '${model}' como fallback.`,
+      });
+    } else if (!desktopPreference && !available.has(configuredModel)) {
+      post({
+        type: "error",
+        message: `O modelo configurado '${configuredModel}' não está disponível para esta chave. Usando '${model}' como fallback.`,
+      });
+    }
+  } else {
+    reasoningEffort = undefined;
   }
+}
+
+const REASONING_EFFORT_VALUES: readonly ReasoningEffort[] = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return REASONING_EFFORT_VALUES.includes(value as ReasoningEffort);
+}
+
+function normalizeReasoningEffort(value: unknown): ReasoningEffort | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "off") return "none";
+  if (normalized === "minimum") return "minimal";
+  if (normalized === "extra-high" || normalized === "extra_high") {
+    return "xhigh";
+  }
+  if (normalized === "maximum") return "max";
+  return isReasoningEffort(normalized) ? normalized : undefined;
+}
+
+function parseReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  return value && isReasoningEffort(value) ? value : undefined;
 }
 
 /** Reports the current context usage so the meter stays live between turns. */
@@ -1999,7 +2087,9 @@ async function handle(request: EngineRequest): Promise<void> {
 
       const config = await loadConfig();
       baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
-      model = config.model ?? DEFAULT_MODEL;
+      configuredModel = config.model ?? DEFAULT_MODEL;
+      model =
+        process.env.RUBY_DESKTOP_PREFERRED_MODEL?.trim() || configuredModel;
 
       if (!apiKey) {
         post({
@@ -2022,6 +2112,7 @@ async function handle(request: EngineRequest): Promise<void> {
         type: "ready",
         workspace: process.cwd(),
         model,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         toolCount,
         skillCount,
         skills: getSkillSummaries(),
@@ -2059,8 +2150,29 @@ async function handle(request: EngineRequest): Promise<void> {
         });
         return;
       }
+      const selected = modelCatalog.find((entry) => entry.id === request.model);
+      if (!selected) {
+        post({ type: "error", message: `O modelo '${request.model}' não está disponível.` });
+        return;
+      }
+      if (
+        request.reasoningEffort &&
+        !selected.reasoningEfforts?.includes(request.reasoningEffort)
+      ) {
+        post({
+          type: "error",
+          message: `O modelo '${request.model}' não aceita o effort '${request.reasoningEffort}'.`,
+        });
+        return;
+      }
       model = request.model;
+      reasoningEffort = request.reasoningEffort;
       await buildAgent();
+      post({
+        type: "modelSelection",
+        model,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      });
       reportUsage();
       post({ type: "status", status: "ready" });
       return;

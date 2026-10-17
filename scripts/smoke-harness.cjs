@@ -319,8 +319,8 @@ function runScenario({
     registerSend(IPC.send.newBrowserTab, (_e, url) => hooks.onNewBrowserTab?.(url, api));
     registerSend(IPC.send.selectBrowserTab, (_e, id) => hooks.onSelectBrowserTab?.(id, api));
     registerSend(IPC.send.closeBrowserTab, (_e, id) => hooks.onCloseBrowserTab?.(id, api));
-    registerSend(IPC.send.setModel, (_e, model) =>
-      engine?.postMessage({ type: "setModel", model }),
+    registerSend(IPC.send.setModel, (_e, model, reasoningEffort) =>
+      engine?.postMessage({ type: "setModel", model, reasoningEffort }),
     );
     registerSend(IPC.send.setPermissionMode, (_e, mode) =>
       engine?.postMessage({ type: "setPermissionMode", mode }),

@@ -94,6 +94,10 @@ GitHub, sem depender da publicação no npm.
 
 - Seletor de modelo saiu da barra global e foi para o composer; abre uma lista pesquisável com
   contexto e capacidades, e fica indisponível durante um turno ativo.
+- O seletor também oferece esforço de raciocínio: automático, desligado (`none`), mínimo
+  (`minimal`), baixo, médio, alto, extra-alto (`xhigh`) e máximo (`max`). Usa os níveis publicados
+  pelo catálogo e persiste a escolha de modelo e effort entre reinícios; aliases `off` e `minimum`
+  são normalizados para os valores aceitos pela API.
 - Turnos, etapas de ferramenta, tokens, cache e uso da janela aparecem como chips clicáveis com
   popovers explicativos. Também exibem tempo LLM/tool, TTFT e velocidade de geração quando há dados.
 - `cachedTokens` já exposto pelo engine agora atravessa o contrato IPC e entra nos totais.

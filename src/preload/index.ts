@@ -34,7 +34,8 @@ const api: RubyDesktopApi = {
 
   abort: () => ipcRenderer.send(IPC.send.abort),
 
-  setModel: (model) => ipcRenderer.send(IPC.send.setModel, model),
+  setModel: (model, reasoningEffort) =>
+    ipcRenderer.send(IPC.send.setModel, model, reasoningEffort),
 
   setPermissionMode: (mode) =>
     ipcRenderer.send(IPC.send.setPermissionMode, mode),

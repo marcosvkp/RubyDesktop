@@ -33,8 +33,10 @@ import type {
   GoalStatus,
   AgentSettings,
   McpServerDraft,
+  ModelSummary,
   PermissionMode,
   RecentWorkspaceSummary,
+  ReasoningEffort,
   UserQuestionAnswer,
 } from "@shared/ipc";
 import { IPC } from "@shared/ipc";
@@ -280,6 +282,10 @@ let engineBusy = false;
 let engineCompacting = false;
 const DEFAULT_AGENT_SETTINGS: AgentSettings = { maxIterations: 50 };
 let agentSettings: AgentSettings = { ...DEFAULT_AGENT_SETTINGS };
+let preferredModel: string | undefined;
+let preferredReasoningEffort: ReasoningEffort | undefined;
+let preferredModelWrite: Promise<void> = Promise.resolve();
+let availableModels: Map<string, ModelSummary> | undefined;
 const approvalModalIds = new Set<string>();
 
 function apiKeyPath(): string {
@@ -288,6 +294,73 @@ function apiKeyPath(): string {
 
 function agentSettingsPath(): string {
   return join(app.getPath("userData"), "agent-settings.json");
+}
+
+function preferredModelPath(): string {
+  return join(app.getPath("userData"), "selected-model.json");
+}
+
+function isValidModelId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 512;
+}
+
+async function loadPreferredModel(): Promise<void> {
+  try {
+    const saved = JSON.parse(await readFile(preferredModelPath(), "utf8")) as {
+      model?: unknown;
+      reasoningEffort?: unknown;
+    };
+    if (isValidModelId(saved.model)) preferredModel = saved.model.trim();
+    if (isValidReasoningEffort(saved.reasoningEffort)) {
+      preferredReasoningEffort = saved.reasoningEffort;
+    }
+  } catch {
+    // A missing or malformed preference falls back to the engine configuration.
+  }
+}
+
+function isValidReasoningEffort(value: unknown): value is ReasoningEffort {
+  return (
+    value === "none" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  );
+}
+
+function persistPreferredModel(
+  model: string,
+  reasoningEffort: ReasoningEffort | undefined,
+): Promise<void> {
+  preferredModelWrite = preferredModelWrite
+    .then(async () => {
+      const target = preferredModelPath();
+      const temporary = `${target}.tmp`;
+      await mkdir(app.getPath("userData"), { recursive: true });
+      try {
+        await writeFile(
+          temporary,
+          `${JSON.stringify({ model, ...(reasoningEffort ? { reasoningEffort } : {}) }, null, 2)}\n`,
+          {
+            encoding: "utf8",
+            mode: 0o600,
+          },
+        );
+        await rename(temporary, target);
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => {});
+        throw error;
+      }
+    })
+    .catch((error: unknown) => {
+      console.error(
+        `[model preference] ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  return preferredModelWrite;
 }
 
 function isValidMaxIterations(value: unknown): value is number {
@@ -372,6 +445,14 @@ async function doStartEngine(): Promise<void> {
 
   const env = { ...process.env } as Record<string, string>;
   env.RUBY_DESKTOP_MAX_ITERATIONS = String(agentSettings.maxIterations);
+  availableModels = undefined;
+  if (preferredModel) env.RUBY_DESKTOP_PREFERRED_MODEL = preferredModel;
+  else delete env.RUBY_DESKTOP_PREFERRED_MODEL;
+  if (preferredReasoningEffort) {
+    env.RUBY_DESKTOP_PREFERRED_REASONING_EFFORT = preferredReasoningEffort;
+  } else {
+    delete env.RUBY_DESKTOP_PREFERRED_REASONING_EFFORT;
+  }
   const savedApiKey = await readSavedApiKey();
   if (savedApiKey) {
     // A key saved by the desktop takes precedence over inherited environment
@@ -392,6 +473,27 @@ async function doStartEngine(): Promise<void> {
   engine.on("message", (message: EngineResponse) => {
     if (message.type === "status") engineBusy = message.status === "busy";
     if (message.type === "compacting") engineCompacting = message.active;
+    if (message.type === "models") {
+      availableModels = new Map(message.models.map((entry) => [entry.id, entry]));
+    }
+    if (
+      message.type === "ready" &&
+      isValidModelId(message.model) &&
+      availableModels?.has(message.model)
+    ) {
+      preferredModel = message.model;
+      preferredReasoningEffort = message.reasoningEffort;
+      void persistPreferredModel(message.model, message.reasoningEffort);
+    }
+    if (
+      message.type === "modelSelection" &&
+      isValidModelId(message.model) &&
+      availableModels?.has(message.model)
+    ) {
+      preferredModel = message.model;
+      preferredReasoningEffort = message.reasoningEffort;
+      void persistPreferredModel(message.model, message.reasoningEffort);
+    }
     if (message.type === "approvalRequest") {
       approvalModalIds.add(message.request.id);
       applyBrowserBounds();
@@ -765,8 +867,36 @@ ipcMain.on(IPC.send.setWorkspace, (_event, path: string) => {
     });
   });
 });
-ipcMain.on(IPC.send.setModel, (_event, model: string) =>
-  post({ type: "setModel", model }),
+ipcMain.on(
+  IPC.send.setModel,
+  (_event, model: unknown, effort: unknown) => {
+    if (!isValidModelId(model)) return;
+    const selected = model.trim();
+    const entry = availableModels?.get(selected);
+    if (availableModels && !entry) {
+      sendToRenderer({ type: "error", message: `O modelo '${selected}' não está disponível.` });
+      return;
+    }
+    if (effort !== undefined && !isValidReasoningEffort(effort)) {
+      sendToRenderer({ type: "error", message: "Effort de raciocínio inválido." });
+      return;
+    }
+    if (
+      isValidReasoningEffort(effort) &&
+      !entry?.reasoningEfforts?.includes(effort)
+    ) {
+      sendToRenderer({
+        type: "error",
+        message: `O modelo '${selected}' não aceita o effort '${effort}'.`,
+      });
+      return;
+    }
+    post({
+      type: "setModel",
+      model: selected,
+      ...(isValidReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
+    });
+  },
 );
 ipcMain.on(IPC.send.setPermissionMode, (_event, mode: PermissionMode) =>
   post({ type: "setPermissionMode", mode }),
@@ -915,7 +1045,11 @@ ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 // --- Lifecycle --------------------------------------------------------------
 
 void app.whenReady().then(() => {
-  return Promise.all([loadRecentWorkspaces(), loadAgentSettings()]).then(([recent]) => {
+  return Promise.all([
+    loadRecentWorkspaces(),
+    loadAgentSettings(),
+    loadPreferredModel(),
+  ]).then(([recent]) => {
     recentWorkspaces = recent;
     workspace = resolveWorkspace();
     rememberWorkspace(workspace);
@@ -938,7 +1072,8 @@ app.on("before-quit", (event) => {
   if (quitAfterEngineShutdown) return;
   event.preventDefault();
   quitAfterEngineShutdown = true;
-  void stopEngine()
+  void preferredModelWrite
+    .then(() => stopEngine())
     .catch((error: unknown) => {
       console.error(`[engine] graceful shutdown failed: ${String(error)}`);
     })

@@ -11,6 +11,7 @@ import { OutputPanel } from "./components/OutputPanel";
 import { McpPanel } from "./components/McpPanel";
 import { BrowserPanel, BrowserHiddenNotice } from "./components/BrowserPanel";
 import { SettingsModal } from "./components/SettingsModal";
+import { TodoListPanel } from "./components/TodoListPanel";
 import { useStore } from "./store";
 
 export function App(): React.JSX.Element {
@@ -111,6 +112,7 @@ export function App(): React.JSX.Element {
           {showOutput ? (
             <OutputPanel onClose={() => setShowOutput(false)} />
           ) : null}
+          <TodoListPanel />
           <Composer />
         </main>
         {showMcp ? <McpPanel onClose={() => setShowMcp(false)} /> : null}

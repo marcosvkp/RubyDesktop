@@ -203,8 +203,11 @@ export function ChatView(): React.JSX.Element {
   );
 }
 
-const Item = memo(function Item({ item }: { item: ChatItem }): React.JSX.Element {
+const Item = memo(function Item({ item }: { item: ChatItem }): React.JSX.Element | null {
   switch (item.kind) {
+    case "todo-list":
+      return null;
+
     case "user":
       return (
         <div className="flex justify-end">

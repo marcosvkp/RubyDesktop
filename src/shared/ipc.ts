@@ -39,7 +39,15 @@ export interface ModelSummary {
   supportsVision?: boolean;
 }
 
-export type ReasoningEffort = "low" | "medium" | "high";
+/** Values accepted by OpenAI-compatible reasoning endpoints. */
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 export type SubAgentRole = "explorer" | "worker";
 export type SubAgentStatus =
   | "configuring"
@@ -318,7 +326,7 @@ export type EngineRequest =
   | { type: "prompt"; text: string }
   | { type: "activateSkill"; name: string; args: string }
   | { type: "abort" }
-  | { type: "setModel"; model: string }
+  | { type: "setModel"; model: string; reasoningEffort?: ReasoningEffort }
   | { type: "setPermissionMode"; mode: PermissionMode }
   | {
       type: "approvalResponse";
@@ -386,6 +394,7 @@ export type EngineResponse =
       type: "ready";
       workspace: string;
       model: string;
+      reasoningEffort?: ReasoningEffort;
       toolCount: number;
       skillCount: number;
       skills: SkillSummary[];
@@ -393,6 +402,7 @@ export type EngineResponse =
       permissionMode: PermissionMode;
     }
   | { type: "models"; models: ModelSummary[] }
+  | { type: "modelSelection"; model: string; reasoningEffort?: ReasoningEffort }
   | { type: "skills"; skills: SkillSummary[] }
   | {
       type: "sessions";
@@ -496,7 +506,7 @@ export interface RubyDesktopApi {
   /** Cancel the in-flight turn. */
   abort(): void;
   /** Switch the model used for subsequent turns. */
-  setModel(model: string): void;
+  setModel(model: string, reasoningEffort?: ReasoningEffort): void;
   /** Switch the interactive permission mode. */
   setPermissionMode(mode: PermissionMode): void;
   /** Answer a pending approval. */
