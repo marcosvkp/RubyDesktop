@@ -22,6 +22,11 @@ const api: RubyDesktopApi = {
 
   saveApiKey: (key) => ipcRenderer.invoke(IPC.invoke.saveApiKey, key),
 
+  getAgentSettings: () => ipcRenderer.invoke(IPC.invoke.getAgentSettings),
+
+  saveAgentSettings: (maxIterations) =>
+    ipcRenderer.invoke(IPC.invoke.saveAgentSettings, maxIterations),
+
   sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),
 
   activateSkill: (name, args) =>

@@ -11,12 +11,14 @@ export function ModelPicker(): React.JSX.Element {
   const selectModel = useStore((s) => s.selectModel);
   const status = useStore((s) => s.status);
   const busy = useStore((s) => s.busy);
+  const compacting = useStore((s) => s.compacting);
+  const queueCommandPending = useStore((s) => s.queueCommandPending);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const selected = models.find((entry) => entry.id === model);
-  const disabled = busy || status !== "ready" || models.length === 0;
+  const disabled = busy || compacting || queueCommandPending || status !== "ready" || models.length === 0;
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -54,7 +56,7 @@ export function ModelPicker(): React.JSX.Element {
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={busy ? "Aguarde o fim do turno para trocar de modelo" : "Trocar modelo"}
+        title={busy || compacting || queueCommandPending ? "Aguarde o fim da ação atual para trocar de modelo" : "Trocar modelo"}
         className={cn(
           "flex max-w-[230px] items-center gap-2 rounded-lg border border-line bg-background/70 px-3 py-2 text-xs transition-colors",
           "hover:border-primary/40 hover:bg-white/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",

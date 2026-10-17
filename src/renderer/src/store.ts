@@ -83,6 +83,16 @@ export interface SessionUsageStats {
 }
 
 type MetricEntry = MetricLine & { id: string };
+export type TurnProgress = Extract<EngineResponse, { type: "turnProgress" }> & {
+  receivedAt: number;
+  publicSummary?: string;
+};
+
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  createdAt: number;
+}
 
 export function emptySessionUsageStats(): SessionUsageStats {
   return {
@@ -150,11 +160,15 @@ interface State {
   model: string;
   status: EngineStatus;
   items: ChatItem[];
+  queuedMessages: QueuedMessage[];
   turnCount: number;
   stepCount: number;
   sessions: SessionSummary[];
   currentSessionId?: string;
   busy: boolean;
+  /** An asynchronous slash command is running outside a model turn. */
+  queueCommandPending: boolean;
+  turnProgress?: TurnProgress;
   fatal?: string;
   contextWindow: number;
   contextUsed: number;
@@ -188,6 +202,9 @@ interface State {
   /** Append a local notice — used by slash commands, which have no engine reply. */
   pushNotice: (text: string, tone?: "info" | "error") => void;
   send: (text: string) => void;
+  removeQueuedMessage: (id: string) => void;
+  moveQueuedMessage: (id: string, direction: -1 | 1) => void;
+  drainQueue: () => void;
   activateSkill: (name: string, args: string) => void;
   abort: () => void;
   selectModel: (model: string) => void;
@@ -545,6 +562,8 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
         streaming: false,
       });
     } else if (entry.type === "tool_call") {
+      // `think` is a private scratchpad. Keep it out of both live and restored UI.
+      if (entry.name === "think" || entry.name === "report_progress") continue;
       const id = nextId();
       const calls = toolCallsByName.get(entry.name) ?? [];
       calls.push({
@@ -868,6 +887,70 @@ function runSlashCommand(text: string, get: () => State): boolean {
   }
 }
 
+/** Whether a slash command has an engine response that can resume FIFO draining. */
+function slashCommandWaitsForEngine(text: string, skills: SkillSummary[]): boolean {
+  const [command = "", ...rest] = text.slice(1).split(/\s+/);
+  const name = command.toLowerCase();
+  const arg = rest.join(" ").trim();
+  if (name === "help" || name === "clear") return false;
+  if (name === "compact" || name === "mode" || name === "plan") {
+    if (name === "mode") {
+      return ["ask", "normal", "edits", "accept-edits", "acceptedits", "plan"].includes(arg.toLowerCase());
+    }
+    return true;
+  }
+  if (name === "goal") {
+    if (!arg) return false;
+    const action = rest[0]?.toLowerCase();
+    if (action === "auto") {
+      const rounds = rest[1] === undefined ? undefined : Number(rest[1]);
+      return rounds === undefined || (Number.isInteger(rounds) && rounds >= 1 && rounds <= 100);
+    }
+    if (action === "stop" || action === "note") return action === "stop" || Boolean(rest.slice(1).join(" ").trim());
+    if (action === "max-rounds") {
+      const rounds = Number(rest[1]);
+      return Number.isInteger(rounds) && rounds >= 1 && rounds <= 100;
+    }
+    if (["pause", "resume", "done", "complete", "clear"].includes(action ?? "")) {
+      return rest.length === 1;
+    }
+    return true;
+  }
+  return skills.some((skill) => skill.name.toLowerCase() === name);
+}
+
+/** Adds a transcript echo and dispatches one prompt or UI command. */
+function dispatchText(
+  text: string,
+  get: () => State,
+  set: (partial: Partial<State> | ((state: State) => Partial<State>)) => void,
+): boolean {
+  if (isKnownSlashCommand(text, get().skills)) {
+    set((s) => ({
+      items: [
+        ...closeStreaming(s.items),
+        { kind: "user", id: nextId(), text },
+      ],
+    }));
+    const waitsForResponse = slashCommandWaitsForEngine(text, get().skills);
+    if (waitsForResponse) set({ queueCommandPending: true });
+    if (/^\/compact(?:\s|$)/i.test(text)) set({ compacting: true });
+    runSlashCommand(text, get);
+    return waitsForResponse;
+  }
+
+  set((s) => ({
+    items: [
+      ...closeStreaming(s.items),
+      { kind: "user", id: nextId(), text },
+    ],
+    turnCount: s.turnCount + 1,
+    busy: true,
+  }));
+  window.ruby.sendPrompt(text);
+  return true;
+}
+
 export const useStore = create<State>((set, get) => ({
   workspace: "",
   recentWorkspaces: [],
@@ -875,10 +958,12 @@ export const useStore = create<State>((set, get) => ({
   model: "",
   status: "starting",
   items: [],
+  queuedMessages: [],
   turnCount: 0,
   stepCount: 0,
   sessions: [],
   busy: false,
+  queueCommandPending: false,
   contextWindow: 0,
   contextUsed: 0,
   compacting: false,
@@ -928,6 +1013,7 @@ export const useStore = create<State>((set, get) => ({
                 goal: undefined,
                 goalAutoRunning: false,
                 approval: undefined,
+                queuedMessages: [],
               }
             : {}),
         });
@@ -954,6 +1040,7 @@ export const useStore = create<State>((set, get) => ({
         set({
           sessions: message.sessions,
           currentSessionId: message.currentSessionId,
+          queueCommandPending: false,
           ...(transcriptItems !== undefined
             ? {
                 items: transcriptItems,
@@ -964,11 +1051,34 @@ export const useStore = create<State>((set, get) => ({
               }
             : {}),
         });
+        get().drainQueue();
         return;
       }
 
       case "status":
-        set({ status: message.status, busy: message.status === "busy" });
+        set({
+          status: message.status,
+          busy: message.status === "busy",
+          ...(message.status === "ready" ? { queueCommandPending: false } : {}),
+          ...(message.status !== "busy" ? { turnProgress: undefined } : {}),
+        });
+        if (message.status === "ready") get().drainQueue();
+        return;
+
+      case "turnProgress":
+        set((s) => {
+          const publicSummary =
+            message.phase === "public_update"
+              ? message.message
+              : s.turnProgress?.publicSummary;
+          return {
+            turnProgress: {
+              ...message,
+              receivedAt: Date.now(),
+              ...(publicSummary ? { publicSummary } : {}),
+            },
+          };
+        });
         return;
 
       case "usage":
@@ -981,11 +1091,13 @@ export const useStore = create<State>((set, get) => ({
       case "permissionMode":
         set((s) => ({
           permissionMode: message.mode,
+          queueCommandPending: false,
           items: notice(
             s.items,
             `Modo de permissão: ${PERMISSION_MODE_LABEL[message.mode]}`,
           ),
         }));
+        get().drainQueue();
         return;
 
       case "grants":
@@ -993,7 +1105,8 @@ export const useStore = create<State>((set, get) => ({
         return;
 
       case "goal":
-        set({ goal: message.goal });
+        set({ goal: message.goal, queueCommandPending: false });
+        get().drainQueue();
         return;
 
       case "goalAuto":
@@ -1040,7 +1153,11 @@ export const useStore = create<State>((set, get) => ({
         return;
 
       case "compacting":
-        set({ compacting: message.active });
+        set({
+          compacting: message.active,
+          ...(message.active ? {} : { queueCommandPending: false }),
+        });
+        if (!message.active) get().drainQueue();
         return;
 
       case "approvalRequest":
@@ -1138,7 +1255,12 @@ export const useStore = create<State>((set, get) => ({
         return;
 
       case "error":
-        set((s) => ({ items: notice(s.items, message.message, "error") }));
+        set((s) => ({
+          items: notice(s.items, message.message, "error"),
+          queueCommandPending: false,
+          ...(s.compacting && s.queueCommandPending ? { compacting: false } : {}),
+        }));
+        get().drainQueue();
         return;
 
       case "fatal":
@@ -1153,6 +1275,13 @@ export const useStore = create<State>((set, get) => ({
             return;
 
           case "tool_call":
+            if (event.name === "think" || event.name === "report_progress") {
+              set((s) => ({
+                stepCount: s.stepCount + 1,
+                items: closeStreaming(s.items),
+              }));
+              return;
+            }
             set((s) => ({
               stepCount: s.stepCount + 1,
               items: [
@@ -1170,6 +1299,7 @@ export const useStore = create<State>((set, get) => ({
             return;
 
           case "tool_result":
+            if (event.name === "think" || event.name === "report_progress") return;
             set((s) => {
               // Provider IDs pair results with their exact call; retain the name/FIFO
               // fallback for older engines that do not emit IDs.
@@ -1234,7 +1364,10 @@ export const useStore = create<State>((set, get) => ({
             return;
 
           case "done":
-            set((s) => ({ items: closeStreaming(s.items) }));
+            set((s) => ({
+              items: closeStreaming(s.items),
+              turnProgress: undefined,
+            }));
             return;
         }
       }
@@ -1244,33 +1377,67 @@ export const useStore = create<State>((set, get) => ({
   send: (text) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (get().busy) {
-      get().pushNotice("Aguarde o turno atual terminar para enviar outra mensagem.", "error");
-      return;
-    }
-
-    // Slash commands are UI-level: echo them so the transcript reads as a
-    // conversation, but never send them to the model.
-    if (isKnownSlashCommand(trimmed, get().skills)) {
+    const state = get();
+    if (state.busy || state.compacting || state.queueCommandPending) {
       set((s) => ({
-        items: [
-          ...closeStreaming(s.items),
-          { kind: "user", id: nextId(), text: trimmed },
+        queuedMessages: [
+          ...s.queuedMessages,
+          { id: nextId(), text: trimmed, createdAt: Date.now() },
         ],
       }));
-      runSlashCommand(trimmed, get);
       return;
     }
 
+    dispatchText(trimmed, get, set);
+  },
+
+  removeQueuedMessage: (id) => {
     set((s) => ({
-      items: [
-        ...closeStreaming(s.items),
-        { kind: "user", id: nextId(), text: trimmed },
-      ],
-      turnCount: s.turnCount + 1,
-      busy: true,
+      queuedMessages: s.queuedMessages.filter((message) => message.id !== id),
     }));
-    window.ruby.sendPrompt(trimmed);
+  },
+
+  moveQueuedMessage: (id, direction) => {
+    set((s) => {
+      const index = s.queuedMessages.findIndex((message) => message.id === id);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= s.queuedMessages.length) return {};
+      const queuedMessages = [...s.queuedMessages];
+      [queuedMessages[index], queuedMessages[target]] = [
+        queuedMessages[target],
+        queuedMessages[index],
+      ];
+      return { queuedMessages };
+    });
+  },
+
+  drainQueue: () => {
+    const state = get();
+    if (
+      state.status !== "ready" ||
+      state.busy ||
+      state.compacting ||
+      state.queueCommandPending ||
+      state.queuedMessages.length === 0
+    ) {
+      return;
+    }
+
+    const [next, ...remaining] = state.queuedMessages;
+    if (!next) return;
+    set({ queuedMessages: remaining });
+    const waitingForResponse = dispatchText(next.text, get, set);
+
+    // Local commands such as /help do not start an engine turn. Keep draining
+    // those in order; model turns and compaction stop the queue until completion.
+    if (
+      !waitingForResponse &&
+      !get().busy &&
+      !get().compacting &&
+      get().status === "ready"
+    ) {
+      queueMicrotask(() => get().drainQueue());
+    }
   },
 
   activateSkill: (name, args) => {
@@ -1347,16 +1514,28 @@ export const useStore = create<State>((set, get) => ({
   respondSubAgentReview: (id, action) =>
     window.ruby.respondSubAgentReview(id, action),
 
-  compact: () => window.ruby.compact(),
+  compact: () => {
+    set({ compacting: true, queueCommandPending: true });
+    window.ruby.compact();
+  },
 
-  newSession: () => window.ruby.newSession(),
-  resumeSession: (sessionId) => window.ruby.resumeSession(sessionId),
+  newSession: () => {
+    set({ queuedMessages: [], queueCommandPending: true });
+    window.ruby.newSession();
+  },
+  resumeSession: (sessionId) => {
+    set({ queuedMessages: [], queueCommandPending: true });
+    window.ruby.resumeSession(sessionId);
+  },
 
   setGoal: (text) => window.ruby.setGoal(text),
   noteGoal: (text) => window.ruby.noteGoal(text),
   setGoalStatus: (status) => window.ruby.setGoalStatus(status),
   setGoalMaxRounds: (maxRounds) => window.ruby.setGoalMaxRounds(maxRounds),
-  startAutoGoal: (maxRounds) => window.ruby.startAutoGoal(maxRounds),
+  startAutoGoal: (maxRounds) => {
+    set({ queueCommandPending: true });
+    window.ruby.startAutoGoal(maxRounds);
+  },
   stopAutoGoal: () => window.ruby.stopAutoGoal(),
   clearGoal: () => window.ruby.clearGoal(),
 
@@ -1366,7 +1545,10 @@ export const useStore = create<State>((set, get) => ({
   testMcpServer: (name, config) => window.ruby.testMcpServer(name, config),
   clearMcpTest: () => set({ mcpTest: undefined }),
 
-  switchWorkspace: (path) => window.ruby.setWorkspace(path),
+  switchWorkspace: (path) => {
+    set({ queuedMessages: [], queueCommandPending: true });
+    window.ruby.setWorkspace(path);
+  },
 
   pickWorkspace: () => {
     void window.ruby.pickWorkspace().then((path) => {
@@ -1377,6 +1559,8 @@ export const useStore = create<State>((set, get) => ({
   reset: () => {
     set({
       items: [],
+      queuedMessages: [],
+      queueCommandPending: true,
       turnCount: 0,
       stepCount: 0,
       contextUsed: 0,

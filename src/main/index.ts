@@ -31,6 +31,7 @@ import type {
   EngineResponse,
   GrantKeyKind,
   GoalStatus,
+  AgentSettings,
   McpServerDraft,
   PermissionMode,
   RecentWorkspaceSummary,
@@ -276,10 +277,50 @@ let engine: Electron.UtilityProcess | null = null;
 let engineStartPromise: Promise<void> | undefined;
 let engineStopPromise: Promise<void> | undefined;
 let engineBusy = false;
+let engineCompacting = false;
+const DEFAULT_AGENT_SETTINGS: AgentSettings = { maxIterations: 50 };
+let agentSettings: AgentSettings = { ...DEFAULT_AGENT_SETTINGS };
 const approvalModalIds = new Set<string>();
 
 function apiKeyPath(): string {
   return join(app.getPath("userData"), "ruby-api-key.enc");
+}
+
+function agentSettingsPath(): string {
+  return join(app.getPath("userData"), "agent-settings.json");
+}
+
+function isValidMaxIterations(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 500;
+}
+
+async function loadAgentSettings(): Promise<void> {
+  try {
+    const saved = JSON.parse(await readFile(agentSettingsPath(), "utf8")) as {
+      maxIterations?: unknown;
+    };
+    if (isValidMaxIterations(saved.maxIterations)) {
+      agentSettings = { maxIterations: saved.maxIterations };
+    }
+  } catch {
+    // A missing or malformed settings file falls back to the built-in defaults.
+  }
+}
+
+async function persistAgentSettings(settings: AgentSettings): Promise<void> {
+  const target = agentSettingsPath();
+  const temporary = `${target}.tmp`;
+  await mkdir(app.getPath("userData"), { recursive: true });
+  try {
+    await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function readSavedApiKey(): Promise<string | undefined> {
@@ -330,6 +371,7 @@ async function doStartEngine(): Promise<void> {
   }
 
   const env = { ...process.env } as Record<string, string>;
+  env.RUBY_DESKTOP_MAX_ITERATIONS = String(agentSettings.maxIterations);
   const savedApiKey = await readSavedApiKey();
   if (savedApiKey) {
     // A key saved by the desktop takes precedence over inherited environment
@@ -349,6 +391,7 @@ async function doStartEngine(): Promise<void> {
 
   engine.on("message", (message: EngineResponse) => {
     if (message.type === "status") engineBusy = message.status === "busy";
+    if (message.type === "compacting") engineCompacting = message.active;
     if (message.type === "approvalRequest") {
       approvalModalIds.add(message.request.id);
       applyBrowserBounds();
@@ -375,6 +418,7 @@ async function doStartEngine(): Promise<void> {
   engine.on("exit", (code: number) => {
     engine = null;
     engineBusy = false;
+    engineCompacting = false;
     approvalModalIds.clear();
     applyBrowserBounds();
     sendToRenderer({
@@ -406,6 +450,7 @@ function stopEngine(): Promise<void> {
     if (!current) return;
     engine = null;
     engineBusy = false;
+    engineCompacting = false;
     current.removeAllListeners("exit");
 
     let tracked: Promise<void>;
@@ -614,6 +659,7 @@ function createWindow(): void {
 
 ipcMain.handle(IPC.invoke.getWorkspace, () => workspace);
 ipcMain.handle(IPC.invoke.getRecentWorkspaces, () => recentWorkspaces);
+ipcMain.handle(IPC.invoke.getAgentSettings, () => ({ ...agentSettings }));
 
 ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
   const options: Electron.OpenDialogOptions = {
@@ -630,8 +676,8 @@ ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
 });
 
 ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
-  if (engineBusy) {
-    return { ok: false, error: "Pare o turno atual antes de trocar a chave." };
+  if (engineBusy || engineCompacting) {
+    return { ok: false, error: "Aguarde o turno e a compactação terminarem antes de trocar a chave." };
   }
   if (!safeStorage.isEncryptionAvailable()) {
     return {
@@ -661,6 +707,48 @@ ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
     };
   }
 });
+
+ipcMain.handle(
+  IPC.invoke.saveAgentSettings,
+  async (_event, maxIterations: number) => {
+    if (engineBusy || engineCompacting) {
+      return {
+        ok: false,
+        error: "Aguarde o turno e a compactação terminarem antes de alterar este limite.",
+      };
+    }
+    if (!isValidMaxIterations(maxIterations)) {
+      return {
+        ok: false,
+        error: "Informe um número inteiro entre 1 e 500 ciclos.",
+      };
+    }
+    if (maxIterations === agentSettings.maxIterations) return { ok: true };
+
+    const previous = agentSettings;
+    const next = { maxIterations };
+    try {
+      await persistAgentSettings(next);
+      agentSettings = next;
+      await stopEngine();
+      sendToRenderer({ type: "status", status: "starting" });
+      await startEngine();
+      return { ok: true };
+    } catch (err) {
+      agentSettings = previous;
+      await persistAgentSettings(previous).catch(() => {});
+      await stopEngine().catch(() => {});
+      await startEngine().catch(() => {});
+      return {
+        ok: false,
+        error:
+          err instanceof Error
+            ? `Não foi possível reiniciar o agente: ${err.message}`
+            : "Não foi possível reiniciar o agente.",
+      };
+    }
+  },
+);
 
 ipcMain.on(IPC.send.prompt, (_event, text: string) =>
   post({ type: "prompt", text }),
@@ -827,7 +915,7 @@ ipcMain.on(IPC.send.refreshModels, () => post({ type: "hello" }));
 // --- Lifecycle --------------------------------------------------------------
 
 void app.whenReady().then(() => {
-  return loadRecentWorkspaces().then((recent) => {
+  return Promise.all([loadRecentWorkspaces(), loadAgentSettings()]).then(([recent]) => {
     recentWorkspaces = recent;
     workspace = resolveWorkspace();
     rememberWorkspace(workspace);

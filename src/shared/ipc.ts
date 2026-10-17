@@ -272,6 +272,12 @@ export interface RecentWorkspaceSummary {
   label: string;
 }
 
+/** Desktop-host settings that require restarting the engine to take effect. */
+export interface AgentSettings {
+  /** Maximum model/tool rounds for one response from the main agent. */
+  maxIterations: number;
+}
+
 // --- Metrics (the output panel) ---------------------------------------------
 
 /**
@@ -396,6 +402,14 @@ export type EngineResponse =
       transcript?: SessionEntry[];
     }
   | { type: "status"; status: EngineStatus }
+  | {
+      type: "turnProgress";
+      phase: "model_request";
+      model: string;
+      inputMessages: number;
+    }
+  | { type: "turnProgress"; phase: "internal_analysis" }
+  | { type: "turnProgress"; phase: "public_update"; message: string }
   | { type: "event"; event: AgentEvent }
   | {
       type: "usage";
@@ -471,6 +485,10 @@ export interface RubyDesktopApi {
   setWorkspace(path: string): void;
   /** Encrypt and store the Ruby API key through the operating system keychain. */
   saveApiKey(key: string): Promise<{ ok: boolean; error?: string }>;
+  /** Read settings for the main agent. */
+  getAgentSettings(): Promise<AgentSettings>;
+  /** Save settings and restart the engine when the value changes. */
+  saveAgentSettings(maxIterations: number): Promise<{ ok: boolean; error?: string }>;
   /** Start a turn. Streamed output arrives via `onEngineMessage`. */
   sendPrompt(text: string): void;
   /** Activate one discovered Skill as an explicit user command. */

@@ -3,7 +3,9 @@
     "getWorkspace": "ruby:get-workspace",
     "getRecentWorkspaces": "ruby:get-recent-workspaces",
     "pickWorkspace": "ruby:pick-workspace",
-    "saveApiKey": "ruby:save-api-key"
+    "saveApiKey": "ruby:save-api-key",
+    "getAgentSettings": "ruby:get-agent-settings",
+    "saveAgentSettings": "ruby:save-agent-settings"
   },
   "send": {
     "prompt": "ruby:prompt",

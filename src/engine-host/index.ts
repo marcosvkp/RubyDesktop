@@ -110,6 +110,13 @@ import { WorktreeManager } from "./worktrees.js";
 const port = (process as unknown as { parentPort: Electron.ParentPort })
   .parentPort;
 
+function readConfiguredMaxIterations(): number | undefined {
+  const value = Number(process.env.RUBY_DESKTOP_MAX_ITERATIONS);
+  return Number.isInteger(value) && value >= 1 && value <= 500
+    ? value
+    : undefined;
+}
+
 function post(message: EngineResponse): void {
   port.postMessage(message);
 }
@@ -342,6 +349,20 @@ async function handleMcp(
 function onObservability(event: ObservabilityEvent, agentId?: string): void {
   if (!agentId && event.type === "llm_call_end")
     sessionOutputTokens += event.outputTokens;
+  if (!agentId && event.type === "llm_call_start") {
+    post({
+      type: "turnProgress",
+      phase: "model_request",
+      model: event.model,
+      inputMessages: event.inputMessages,
+    });
+    return;
+  }
+  if (!agentId && event.type === "tool_exec_start" && event.name === "think") {
+    // Signal the phase without forwarding the private scratchpad or its arguments.
+    post({ type: "turnProgress", phase: "internal_analysis" });
+    return;
+  }
   let line: MetricLine | undefined;
   switch (event.type) {
     case "llm_call_end":
@@ -1449,7 +1470,7 @@ async function buildAgent(): Promise<void> {
         )
         .join("\n")}`
     : "The model catalog is unavailable; do not invent a sub-agent model id. Ask the user or use the current model if it becomes available.";
-  const systemInstruction = `${baseInstruction}\n\n## Sub-agent orchestration\n\nDelegate independent work with the task tool when it helps. Propose a concise title, role (explorer for read-only research, worker for isolated implementation), exact catalog model, supported reasoning effort, and focused instructions describing boundaries and output. For each proposed sub-agent, the user chooses whether to start with your configuration or edit it first. Workers run in a Git worktree and their diff is never applied until the user approves it.\n\n${catalogInstructions}`;
+  const systemInstruction = `${baseInstruction}\n\n## Visible progress updates\n\nFor complex tasks that use tools or take multiple steps, use the report_progress tool at meaningful milestones. Send one concise, user-facing sentence describing the current step or its high-level reason. This message appears in the chat's progress panel. It is a public summary, never private scratchpad reasoning or detailed internal deliberation. Do not use it for simple questions or repeat the same update.\n\n## Sub-agent orchestration\n\nDelegate independent work with the task tool when it helps. Propose a concise title, role (explorer for read-only research, worker for isolated implementation), exact catalog model, supported reasoning effort, and focused instructions describing boundaries and output. For each proposed sub-agent, the user chooses whether to start with your configuration or edit it first. Workers run in a Git worktree and their diff is never applied until the user approves it.\n\n${catalogInstructions}`;
   const tools = createDefaultRegistry(model, runner, {
     spawnSubAgent,
     askUser: (question) => requestUserQuestion("main", "Ruby", question),
@@ -1481,6 +1502,34 @@ async function buildAgent(): Promise<void> {
   // panel is closed, which is better than the model not knowing browsing exists.
   registerBrowserTools(tools, browserBridge);
 
+  // This tool writes a short public status summary to the progress panel. It
+  // never exposes the private `think` scratchpad or accepts arbitrary side effects.
+  tools.register({
+    name: "report_progress",
+    readonly: true,
+    description:
+      "Send a concise public progress summary to the user: the current step or its high-level reason. Never include private reasoning, scratchpad content, detailed internal deliberation, or secrets. Use only at meaningful milestones of multi-step work.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: {
+          type: "string",
+          description: "One short user-facing progress sentence, up to 320 characters.",
+        },
+      },
+      required: ["message"],
+    },
+    validate: (params) =>
+      typeof params.message === "string" && params.message.trim().length > 0
+        ? null
+        : "message must be a non-empty string.",
+    execute: async (params) => {
+      const message = (params.message as string).trim().slice(0, 320);
+      post({ type: "turnProgress", phase: "public_update", message });
+      return { success: true, output: "Progress summary shown to the user." };
+    },
+  });
+
   toolCount = tools.all().length;
   skillCount = skills.list().length;
 
@@ -1490,7 +1539,7 @@ async function buildAgent(): Promise<void> {
     skills,
     systemInstruction,
     undefined,
-    undefined,
+    readConfiguredMaxIterations(),
     // `model` is required here: the Agent derives its context window from the
     // model name, and the client it was handed does not expose one. Omitting it
     // silently falls back to 100k, which would make auto-compaction fire at 75k

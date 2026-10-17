@@ -11,6 +11,9 @@ export function Composer(): React.JSX.Element {
   const send = useStore((s) => s.send);
   const abort = useStore((s) => s.abort);
   const busy = useStore((s) => s.busy);
+  const compacting = useStore((s) => s.compacting);
+  const queueCommandPending = useStore((s) => s.queueCommandPending);
+  const queuedCount = useStore((s) => s.queuedMessages.length);
   const status = useStore((s) => s.status);
   const skills = useStore((s) => s.skills);
   const [text, setText] = useState("");
@@ -19,7 +22,7 @@ export function Composer(): React.JSX.Element {
   const ref = useRef<HTMLTextAreaElement>(null);
   const disabled = status !== "ready" && status !== "busy";
   const suggestions = getSlashSuggestions(text, skills);
-  const showSuggestions = !busy && !suggestionsHidden && suggestions.length > 0;
+  const showSuggestions = !disabled && !suggestionsHidden && suggestions.length > 0;
 
   useEffect(() => {
     const el = ref.current;
@@ -34,7 +37,7 @@ export function Composer(): React.JSX.Element {
   }, [text]);
 
   function submit(): void {
-    if (busy || disabled || !text.trim()) return;
+    if (disabled || !text.trim()) return;
     send(text);
     setText("");
   }
@@ -148,7 +151,10 @@ export function Composer(): React.JSX.Element {
 
           <div className="flex items-center gap-2 px-3 pb-2.5">
             <span className="flex-1 pl-1 text-[10px] text-muted-foreground">
-              Enter envia <span className="px-1 text-border">·</span> Shift+Enter quebra a linha
+              {busy || compacting || queueCommandPending
+                ? `Enter adiciona à fila${queuedCount ? ` · ${queuedCount} pendente(s)` : ""}`
+                : "Enter envia"}{" "}
+              <span className="px-1 text-border">·</span> Shift+Enter quebra a linha
             </span>
             <ModelPicker />
             {busy ? (
@@ -161,18 +167,17 @@ export function Composer(): React.JSX.Element {
               >
                 <Square className="h-3.5 w-3.5" />
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={disabled || !text.trim()}
-                title="Enviar mensagem"
-                aria-label="Enviar mensagem"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/20 transition-all hover:-translate-y-0.5 hover:opacity-90 disabled:translate-y-0 disabled:opacity-30 disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </button>
-            )}
+            ) : null}
+            <button
+              type="button"
+              onClick={submit}
+              disabled={disabled || !text.trim()}
+              title={busy || compacting || queueCommandPending ? "Adicionar mensagem à fila" : "Enviar mensagem"}
+              aria-label={busy || compacting || queueCommandPending ? "Adicionar mensagem à fila" : "Enviar mensagem"}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/20 transition-all hover:-translate-y-0.5 hover:opacity-90 disabled:translate-y-0 disabled:opacity-30 disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </button>
           </div>
         </div>
 

@@ -297,6 +297,11 @@ function runScenario({
       ok: false,
       error: "Unavailable in smoke harness.",
     }));
+    registerInvoke(IPC.invoke.getAgentSettings, () => ({ maxIterations: 50 }));
+    registerInvoke(IPC.invoke.saveAgentSettings, async () => ({
+      ok: false,
+      error: "Unavailable in smoke harness.",
+    }));
 
     // The fire-and-forget channels, mirroring src/main/index.ts. A channel missing
     // here would make the smoke test pass while the real app was broken.

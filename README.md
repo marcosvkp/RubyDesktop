@@ -39,6 +39,7 @@ O aplicativo reúne conversa, ferramentas, permissões, navegador, sessões e m�
 | **MCP e Skills** | Conecte ferramentas MCP, use 41 Skills embutidas (incluindo 28 para Minecraft) e crie uma Skill de projeto com `/new-skill`. |
 | **Sessões e workspaces recentes** | Retome conversas salvas e volte rapidamente aos projetos usados recentemente. |
 | **Métricas da sessão** | Consulte turnos, etapas, tokens, cache, uso da janela de contexto e, quando disponível, tempos e velocidade. |
+| **Limite do agente** | Ajuste nas configurações quantas rodadas com ferramentas o agente principal pode executar em uma resposta. O padrão é 50, com faixa configurável de 1 a 500. |
 | **Atualizações** | O app verifica as releases do GitHub ao iniciar. Pacotes assinados podem baixar e instalar atualizações; nos demais, o app avisa quando há uma nova versão e abre a página de download. |
 
 ## Instalar
@@ -51,9 +52,9 @@ Abra [Releases](https://github.com/marcosvkp/RubyDesktop/releases/latest) e esco
 | **macOS** | Arquivo `.dmg` ou `.zip` para `mac-x64` (Intel) ou `mac-arm64` (Apple Silicon). |
 | **Linux** | `.AppImage` ou `.deb` para `amd64`. |
 
-Atualmente, a release `v0.1.4` contém apenas os três instaladores Windows (x64, ARM64 e combinado). Os artefatos macOS e Linux da release anterior continuam disponíveis no histórico de [Releases](https://github.com/marcosvkp/RubyDesktop/releases).
+As releases multiplataforma incluem instaladores para Windows, macOS e Linux. Windows e macOS podem exibir avisos do sistema enquanto os pacotes não tiverem assinatura de código.
 
-Os instaladores Windows e macOS podem exibir avisos do sistema enquanto os pacotes não tiverem assinatura de código.
+O limite do agente principal pode ser alterado em **Configurações**. Cada ciclo corresponde a uma rodada do modelo que pede ferramentas; aumentar o valor permite tarefas mais longas e pode aumentar o tempo e o uso de tokens. Subagentes mantêm seu limite próprio.
 
 ### Configurar a chave Ruby
 
