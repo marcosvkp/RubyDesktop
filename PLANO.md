@@ -17,10 +17,10 @@ do provider, `smoke-permissions` não completou uma segunda chamada ao provider 
 repetido. A suíte completa de smokes havia passado na etapa M6 anterior.
 
 RubyCLI build/typecheck/lint/format passaram; o Vitest local executado pelo hook reportou 1165
-aprovados e 70 ignorados. Os 21 casos live falharam com assertion de libuv no Node 24/Windows
-(`3221226505`). A CI anterior do Desktop também encontrou cinco falhas de separação de caminhos
-Windows em Linux/macOS e um caso intermitente de startup no Windows; corrigidos em `rubycli@9eb5139`
-e `rubycli@b02ca4e`, aguardando nova execução da CI.
+aprovados, 70 ignorados e 21 falhas nos casos live, com assertion de libuv no Node 24/Windows
+(`3221226505`). As falhas da CI anterior em resolução de caminhos e startup de shell foram corrigidas
+em `rubycli@9eb5139` e `rubycli@b02ca4e`; a CI do Desktop `c722d9b` passou em Windows, Linux e
+macOS, incluindo os smokes determinísticos e verificação dos pacotes.
 
 **Hardening `FIX-1` a `FIX-38` — 2026-10-14:** concluídas as correções aplicáveis ao Desktop:
 validação de IPC e navegação, blocklist e grants, encerramento/reset do engine, RPC e refs do
@@ -782,7 +782,7 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 - RubyCLI foi enviado em `70e9e2d` (Skills e leitura rápida), `9eb5139` (paths Windows nos runners
   POSIX) e `b02ca4e` (timeout de startup mais estável no smoke Windows). `ruby-engine.lock.json` e
   `RUBYCLI_REF` apontam para `b02ca4e`; `npm run build` do Desktop passou e verificou **41 Skills**.
-- O candidato Desktop `0.1.4` ainda não foi marcado: o workflow protegido exige certificado
+- O candidato Desktop `0.1.4` ainda não foi marcado: a CI passou e o workflow protegido exige certificado
   Windows e certificado/credenciais Apple, que não estão configurados no repositório.
 
 ---

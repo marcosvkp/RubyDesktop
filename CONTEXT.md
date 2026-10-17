@@ -23,9 +23,9 @@ depender da publicação no npm.
 - RubyDesktop: `npm run build` passou com o novo pin; o bundle contém as mesmas 41 Skills. O build
   sem elevação foi bloqueado pelo sandbox ao resolver `browser-tools.ts` e passou ao repetir com a
   permissão de build necessária.
-- A CI anterior do Desktop falhou em cinco testes de resolução do shell em Linux/macOS e um caso
-  intermitente no Windows; as correções estão em `9eb5139` e `b02ca4e`. A nova execução com o pin
-  final ainda precisa terminar. O hook local executou o Vitest completo: 1165 passaram, 70 foram
+- A CI do candidato `c722d9b` passou nos três runners (Windows, Linux e macOS), incluindo testes
+  da engine, build, smokes determinísticos e verificação do pacote. Ela valida as correções das
+  falhas anteriores de shell. O hook local executou o Vitest completo: 1165 passaram, 70 foram
   ignorados e os 21 casos live terminaram com erro `3221226505` no Windows.
 - A CI agora empacota e verifica o diretório instalado em Windows, macOS e Linux; quando o secret
   `RUBY_API_KEY` existe, executa os seis smoke scripts em cada runner (Linux via Xvfb).
