@@ -7,16 +7,20 @@
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e o M8 (Skills de modding Minecraft) estão implementados.
-A hardening pass de `FIX.md` também foi implementada no Desktop. A release `v0.1.5` fixa o RubyCLI
-em `b02ca4e9ca744cea007258cc454479e179020a41`, inclui 41 Skills embutidas e foi publicada em
-2026-10-17 com 17 artefatos Windows, Linux e macOS. O agente principal agora tem um limite de ciclos
-configurável de 1 a 500 (padrão 50), salvo nas configurações do Desktop. Windows/macOS permanecem
-sem assinatura; Linux inclui o feed de atualização. A próxima etapa de produto planejada é M7
-(anexos de imagem e geração de imagens). O workflow compila a engine do repositório próprio no
-GitHub, sem depender da publicação no npm.
+A hardening pass de `FIX.md` também foi implementada no Desktop. A release atual `v0.1.6` fixa o
+RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutidas e foi publicada
+em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
+e persistente, além da lista de tarefas do agente no chat. O agente principal tem limite de ciclos
+configurável de 1 a 500 (padrão 50). Windows/macOS permanecem sem assinatura; Linux inclui o feed de
+atualização. A próxima etapa de produto planejada é M7 (anexos de imagem e geração de imagens). O
+workflow compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
 
 ### Verificação atual — 2026-10-17
 
+- RubyDesktop `v0.1.6`: publicada após sucesso da release Actions `39068771826`, com 17 artefatos
+  Windows, Linux e macOS. A CI `39068759583` passou nos três sistemas; o pin do RubyCLI é
+  `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`. Os smokes live foram ignorados por falta do secret
+  `RUBY_API_KEY`; os testes determinísticos, empacotamento e verificação do pacote passaram.
 - RubyDesktop `v0.1.5`: `npm run typecheck` e `npm run build` passaram localmente. O commit
   `264ca10` adiciona o limite configurável do agente principal e melhorias de fila/atividade no chat;
   `200d3a4` corrige o coletor de assets, que não deve exigir blockmap para AppImage. A CI
@@ -96,8 +100,11 @@ GitHub, sem depender da publicação no npm.
   contexto e capacidades, e fica indisponível durante um turno ativo.
 - O seletor também oferece esforço de raciocínio: automático, desligado (`none`), mínimo
   (`minimal`), baixo, médio, alto, extra-alto (`xhigh`) e máximo (`max`). Usa os níveis publicados
-  pelo catálogo e persiste a escolha de modelo e effort entre reinícios; aliases `off` e `minimum`
-  são normalizados para os valores aceitos pela API.
+  pelo catálogo e persiste a escolha de modelo e effort entre reinícios; aliases `off`, `minimum`,
+  `extra-high` e `maximum` são normalizados para os valores aceitos pela API. Níveis não anunciados
+  pelo modelo ficam visíveis, mas indisponíveis.
+- A ferramenta `todo_write` aparece como uma lista recolhível de tarefas acima do composer; a
+  transcrição restaurada reconstrói a última lista após reabrir a conversa.
 - Turnos, etapas de ferramenta, tokens, cache e uso da janela aparecem como chips clicáveis com
   popovers explicativos. Também exibem tempo LLM/tool, TTFT e velocidade de geração quando há dados.
 - `cachedTokens` já exposto pelo engine agora atravessa o contrato IPC e entra nos totais.
@@ -194,12 +201,11 @@ GitHub, sem depender da publicação no npm.
   instalador Windows continua habilitada.
 - GitHub Actions tem CI e workflow de release em runners Windows, Linux e macOS. A CI compila e
   verifica o pacote nas três plataformas, além dos testes determinísticos do RubyCLI. A release mais
-  recente, `v0.1.5`, foi publicada após sucesso dos três builds e contém 17 artefatos.
-- Linux publica AppImage/deb com feed de atualização. Esta release também inclui os metadados
-  `latest*.yml` das três plataformas. Linux usa o feed automático; Windows e macOS sem assinatura
-  verificam releases no GitHub e encaminham para o download manual. O auto-update instalável do
-  Windows/macOS depende da configuração de assinatura. Windows pode mostrar alerta de editor
-  desconhecido.
+  recente, `v0.1.6`, foi publicada após sucesso dos três builds e contém 17 artefatos.
+- Linux publica AppImage/deb com `latest-linux.yml`. Linux usa o feed automático; Windows e macOS sem
+  assinatura verificam releases no GitHub e encaminham para o download manual. O auto-update
+  instalável do Windows/macOS depende da configuração de assinatura. Windows pode mostrar alerta de
+  editor desconhecido.
 - A release `v0.1.5` contém instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS
   x64/arm64 DMG/ZIP. Os builds passaram na CI, mas macOS/Linux ainda não foram executados
   interativamente neste host.
@@ -394,7 +400,7 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 | Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
-| **Release multiplataforma**       | `v0.1.5` oferece Windows/Linux/macOS; builds sem assinatura exibem avisos no Windows/macOS e não recebem update automático | Validar a instalação nos três sistemas e configurar certificados antes de distribuir amplamente |
+| **Release multiplataforma**       | `v0.1.6` oferece Windows/Linux/macOS; builds sem assinatura exibem avisos no Windows/macOS e não recebem update automático | Validar a instalação nos três sistemas e configurar certificados antes de distribuir amplamente |
 | **CI/smokes live**                | Os smokes live dependem do provider e da chave; assinaturas são opcionais no fluxo atual       | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` para executar os smokes live |
 
 ---

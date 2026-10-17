@@ -3,7 +3,7 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · `v0.1.5` multiplataforma publicada · M8 implementado · M7 planejado**
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · `v0.1.6` multiplataforma publicada · M8 implementado · M7 planejado**
 Data: 2026-10-17
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
@@ -12,6 +12,10 @@ Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\Rub
 Desktop (1–500, padrão 50), fila de mensagens e indicador de atividade foram entregues. A release
 `v0.1.5` foi publicada após sucesso dos builds Windows, Linux e macOS, com 17 artefatos. A CI
 `39047192606` passou. Nesta validação local, `npm run typecheck` e `npm run build` passaram.
+**`v0.1.6` — 2026-10-17:** reasoning effort configurável e persistente no seletor do modelo, lista de
+tarefas do agente no chat e Skills visuais de Minecraft reforçadas. O RubyCLI foi pinado em
+`2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`. A CI `39068759583` e o workflow de release
+`39068771826` passaram em Windows, Linux e macOS; a release foi publicada com 17 assets.
 Historicamente, a `v0.1.3` foi publicada com 19 artefatos. Na validação local daquela rodada,
 `smoke-markdown`, `smoke-session-history` e `smoke-browser` passaram; `smoke-main` recebeu HTTP 502
 do provider, `smoke-permissions` não completou uma segunda chamada ao provider e `smoke-mcp` não foi
@@ -665,11 +669,11 @@ recentes, múltiplas abas e auto-continuação foram concluídos na etapa M6 aba
 - GitHub Actions: CI compila e verifica o pacote em Windows, Linux e macOS; workflow por tag constrói Windows,
   Linux (AppImage/deb) e macOS (DMG + ZIP), anexa os artefatos em uma release draft para revisão e
   publicação manual.
-- A release mais recente é `v0.1.5`, publicada em 2026-10-17 com 17 artefatos. Os builds Windows,
+- A release mais recente é `v0.1.6`, publicada em 2026-10-17 com 17 artefatos. Os builds Windows,
   Linux e macOS passaram no workflow; os instaladores macOS/Linux ainda não foram executados
   interativamente neste host.
 - **Entregável:** instaladores Windows, Linux e macOS, pipeline multiplataforma e verificação de
-  releases do GitHub; `v0.1.5` publicada.
+  releases do GitHub; `v0.1.6` publicada.
 
 #### Uso operacional
 
@@ -683,7 +687,7 @@ O GitHub Actions clona `marcosvkp/rubycli` por padrão. Configure a Actions vari
 `RUBYCLI_REF` com o SHA completo de 40 caracteres do engine; `RUBYCLI_REPOSITORY` pode trocar o
 repositório. A revisão é verificada contra `ruby-engine.lock.json`. A tag de release precisa ser
 `v<package.json.version>`;
-`v0.1.5` corresponde à versão publicada atual.
+`v0.1.6` corresponde à versão publicada atual.
 
 O workflow permite publicar instaladores Windows/macOS sem certificados; o sistema pode exibir
 avisos e o app abre a página de downloads quando há uma nova versão. Com os segredos de assinatura
@@ -704,6 +708,10 @@ runners concluírem. Inclui três instaladores Windows, AppImage e `.deb` Linux,
 arm64 e os blockmaps aplicáveis (17 assets). O workflow `39046928882` revelou que AppImage não tem
 blockmap; o coletor foi corrigido em `200d3a4` e o workflow `39047209443` passou. A CI `39047192606`
 também passou.
+
+**Release multiplataforma `v0.1.6` — 2026-10-17:** publicada após os três builds e a verificação
+dos pacotes passarem. Inclui três instaladores Windows, AppImage e `.deb` Linux, DMG e ZIP macOS
+x64/arm64 e os blockmaps aplicáveis (17 assets). CI `39068759583`; release `39068771826`.
 
 **Verificação M5:** a release `v0.1.3` foi construída e publicada pelo workflow multiplataforma; os
 19 artefatos incluem instaladores para Windows x64/arm64/combinado, Linux AppImage/deb e macOS
@@ -836,7 +844,7 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 | 10  | Perguntas de esclarecimento (M4.1) | **Cartões interativos inline no chat, com opções e resposta livre; a resposta retoma o turno que aguarda.**                                     |
 | 11  | Revisão e merge dos workers        | **Mostrar diff, validar com `git apply --check` e só aplicar após ação explícita; conflito conserva o worktree para revisão.**                  |
 | 12  | Concorrência de subagentes         | **Limite de três agentes em execução simultânea.**                                                                                              |
-| 13  | Distribuição M5                    | **Release multiplataforma `v0.1.5` publicada via GitHub Actions. Builds sem assinatura no Windows/macOS oferecem download manual; instalação automática requer feed e assinatura.** |
+| 13  | Distribuição M5                    | **Release multiplataforma `v0.1.6` publicada via GitHub Actions. Builds sem assinatura no Windows/macOS oferecem download manual; instalação automática requer feed e assinatura.** |
 | 14  | Blocklist catastrófica em todos hosts | **RubyCLI consulta a blocklist em `decideConfirmation`; grants amplos/exatos não a sobrepõem e o override manual vale só uma execução (`ae45df6`).** |
 | 15  | Correlação de chamadas de ferramenta | **IDs opcionais do provider atravessam `AgentEvent` e JSONL; Desktop pareia por ID e mantém fallback para históricos antigos (`ae45df6`).** |
 
@@ -862,14 +870,14 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 | Skills                                   | ✅ 41 no engine RubyCLI; pinado no candidato Desktop `0.1.4`                                 |
 | Terminal integrado                       | ✅ M3                                                                                        |
 | Permissões com aprovação                 | ✅ engine tem, UI em M2                                                                      |
-| Empacotamento Windows                    | ✅ M5: instaladores x64/arm64/combinado; `v0.1.5` multiplataforma publicada sem assinatura     |
+| Empacotamento Windows                    | ✅ M5: instaladores x64/arm64/combinado; `v0.1.6` multiplataforma publicada sem assinatura     |
 | Provider plugável                        | ✅ já no engine + Ruby nativo                                                                |
 
 ---
 
 ## 10. Próximo passo
 
-M0–M6 foram entregues e `v0.1.5` é a release mais recente. M8 está no RubyCLI e no Desktop. O próximo
+M0–M6 foram entregues e `v0.1.6` é a release mais recente. M8 está no RubyCLI e no Desktop. O próximo
 marco de produto proposto continua sendo M7:
 anexar imagens no chat para modelos com visão e disponibilizar uma tool de geração que use a chave
 Ruby já configurada e um modelo de imagem selecionável. Começar confirmando quais endpoints e modelos
