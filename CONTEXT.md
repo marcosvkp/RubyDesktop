@@ -7,15 +7,22 @@
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e o M8 (Skills de modding Minecraft) estão implementados.
-A hardening pass de `FIX.md` também foi implementada no Desktop. A release `v0.1.4` fixa o RubyCLI
-em `b02ca4e9ca744cea007258cc454479e179020a41` e inclui 41 Skills embutidas. Ela foi publicada em
-2026-10-17 com os três instaladores Windows; os artefatos macOS/Linux ainda não foram gerados para
-esta versão. O workflow permite publicar Windows/macOS sem assinatura, com verificação de
-assinatura/notarização quando os certificados forem configurados. A próxima etapa de produto
-planejada é M7 (anexos de imagem e geração de imagens). O workflow compila a engine do repositório
-próprio no GitHub, sem depender da publicação no npm.
+A hardening pass de `FIX.md` também foi implementada no Desktop. A release `v0.1.5` fixa o RubyCLI
+em `b02ca4e9ca744cea007258cc454479e179020a41`, inclui 41 Skills embutidas e foi publicada em
+2026-10-17 com 17 artefatos Windows, Linux e macOS. O agente principal agora tem um limite de ciclos
+configurável de 1 a 500 (padrão 50), salvo nas configurações do Desktop. Windows/macOS permanecem
+sem assinatura; Linux inclui o feed de atualização. A próxima etapa de produto planejada é M7
+(anexos de imagem e geração de imagens). O workflow compila a engine do repositório próprio no
+GitHub, sem depender da publicação no npm.
 
 ### Verificação atual — 2026-10-17
+
+- RubyDesktop `v0.1.5`: `npm run typecheck` e `npm run build` passaram localmente. O commit
+  `264ca10` adiciona o limite configurável do agente principal e melhorias de fila/atividade no chat;
+  `200d3a4` corrige o coletor de assets, que não deve exigir blockmap para AppImage. A CI
+  `39047192606` passou. A release Actions `39047209443` passou nos runners Windows, Linux e macOS e
+  publicou 17 assets: três instaladores Windows, AppImage/deb Linux e DMG/ZIP x64/arm64 macOS, com
+  blockmaps para os targets que os geram e `latest-linux.yml`.
 
 - RubyCLI: typecheck, ESLint, Prettier e build passaram. O commit `70e9e2d` adiciona 28 Skills de
   Minecraft e `read_skills`; `9eb5139` corrige caminhos Windows nos runners POSIX; `b02ca4e` dá
@@ -183,13 +190,13 @@ próprio no GitHub, sem depender da publicação no npm.
   instalador Windows continua habilitada.
 - GitHub Actions tem CI e workflow de release em runners Windows, Linux e macOS. A CI compila e
   verifica o pacote nas três plataformas, além dos testes determinísticos do RubyCLI. A release mais
-  recente, `v0.1.3`, foi publicada; os três builds de plataforma passaram e 19 artefatos foram anexados.
+  recente, `v0.1.5`, foi publicada após sucesso dos três builds e contém 17 artefatos.
 - Linux publica AppImage/deb com feed de atualização. Esta release também inclui os metadados
   `latest*.yml` das três plataformas. Linux usa o feed automático; Windows e macOS sem assinatura
   verificam releases no GitHub e encaminham para o download manual. O auto-update instalável do
   Windows/macOS depende da configuração de assinatura. Windows pode mostrar alerta de editor
   desconhecido.
-- A release `v0.1.3` contém instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS
+- A release `v0.1.5` contém instaladores Windows x64/arm64 e combinado, Linux AppImage/deb e macOS
   x64/arm64 DMG/ZIP. Os builds passaram na CI, mas macOS/Linux ainda não foram executados
   interativamente neste host.
 
@@ -383,7 +390,7 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 | Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
-| **Release multiplataforma**       | `v0.1.4` tem apenas os três instaladores Windows; builds sem assinatura exibem avisos do sistema e não recebem update automático | Gerar e publicar os targets Linux/macOS em uma próxima versão; configurar certificados antes de distribuir amplamente |
+| **Release multiplataforma**       | `v0.1.5` oferece Windows/Linux/macOS; builds sem assinatura exibem avisos no Windows/macOS e não recebem update automático | Validar a instalação nos três sistemas e configurar certificados antes de distribuir amplamente |
 | **CI/smokes live**                | Os smokes live dependem do provider e da chave; assinaturas são opcionais no fluxo atual       | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` para executar os smokes live |
 
 ---
