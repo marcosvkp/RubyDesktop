@@ -44,7 +44,24 @@ function main() {
     assert.notEqual(failure.status, 0, "stale metadata was accepted");
     assert.match(failure.stderr, /unstaged or stale asset/);
 
-    console.log("RESULT PASS: release staging filters stale assets and validates updater metadata");
+    // Linux AppImages and debs use full downloads; electron-builder does not
+    // emit a blockmap for either target.
+    const linuxRelease = path.join(root, "linux-release");
+    const appImage = "ruby-desktop-0.1.3-linux-x86_64.AppImage";
+    const deb = "ruby-desktop-0.1.3-linux-x64.deb";
+    fs.mkdirSync(linuxRelease, { recursive: true });
+    fs.writeFileSync(path.join(linuxRelease, appImage), "appimage");
+    fs.writeFileSync(path.join(linuxRelease, deb), "deb package");
+    fs.writeFileSync(
+      path.join(linuxRelease, "latest-linux.yml"),
+      `version: 0.1.3\nfiles:\n  - url: ${appImage}\n    sha512: fixture\n    size: 8\n  - url: ${deb}\n    sha512: fixture\n    size: 10\npath: ${appImage}\nsha512: fixture\n`,
+    );
+    const linuxSuccess = run(["linux-release", "linux"], root);
+    assert.equal(linuxSuccess.status, 0, linuxSuccess.stderr || linuxSuccess.stdout);
+    const linuxStaged = new Set(fs.readdirSync(path.join(linuxRelease, "release-assets")));
+    assert.deepEqual(linuxStaged, new Set([appImage, deb, "latest-linux.yml"]));
+
+    console.log("RESULT PASS: release staging filters stale assets and validates platform updater metadata");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

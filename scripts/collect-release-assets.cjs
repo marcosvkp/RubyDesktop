@@ -57,7 +57,10 @@ if (updatesEnabled) {
     if (!stagedNames.has(reference)) {
       throw new Error(`${expectedMetadata} references unstaged or stale asset '${reference}'`);
     }
-    if (/\.(?:exe|zip|appimage)$/i.test(reference) && !stagedNames.has(`${reference}.blockmap`)) {
+    // electron-builder creates differential blockmaps for Windows installers and
+    // macOS ZIPs. Linux AppImages are published without blockmaps and use full
+    // downloads, so requiring one here would make every Linux release fail.
+    if (/\.(?:exe|zip)$/i.test(reference) && !stagedNames.has(`${reference}.blockmap`)) {
       throw new Error(`Updater asset '${reference}' is missing its .blockmap file`);
     }
   }
