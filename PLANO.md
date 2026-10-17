@@ -19,7 +19,8 @@ repetido. A suíte completa de smokes havia passado na etapa M6 anterior.
 RubyCLI build/typecheck/lint/format passaram; o Vitest local executado pelo hook reportou 1165
 aprovados e 70 ignorados. Os 21 casos live falharam com assertion de libuv no Node 24/Windows
 (`3221226505`). A CI anterior do Desktop também encontrou cinco falhas de separação de caminhos
-Windows em Linux/macOS; corrigidas em `rubycli@9eb5139`, aguardando nova execução da CI.
+Windows em Linux/macOS e um caso intermitente de startup no Windows; corrigidos em `rubycli@9eb5139`
+e `rubycli@b02ca4e`, aguardando nova execução da CI.
 
 **Hardening `FIX-1` a `FIX-38` — 2026-10-14:** concluídas as correções aplicáveis ao Desktop:
 validação de IPC e navegação, blocklist e grants, encerramento/reset do engine, RPC e refs do
@@ -91,7 +92,7 @@ Li o repositório `github.com/marcosvkp/rubycli` (332 entradas, ~149 arquivos em
 | **Compact** + auto-compact em 75% do contexto                                 | `src/core/compact.ts`                 | ✅ pronto                                                       |
 | Sessões + snapshots/rewind                                                    | `src/state/session.ts`, `snapshot.ts` | ✅ pronto                                                       |
 | Permissões por projeto                                                        | `src/state/project-permissions.ts`    | ✅ pronto                                                       |
-| Skills (41 builtin: 13 gerais + 28 Minecraft; autocomplete no Desktop) | `src/skills/*`                   | ✅ engine publicado em `rubycli@9eb5139` e pinado no candidato Desktop `0.1.4` |
+| Skills (41 builtin: 13 gerais + 28 Minecraft; autocomplete no Desktop) | `src/skills/*`                   | ✅ engine publicado em `rubycli@b02ca4e` e pinado no candidato Desktop `0.1.4` |
 | Sandbox de exec (macOS `sandbox-exec`, Linux `bwrap`, passthrough no Windows) | `src/tools/exec/sandbox/*`            | ⚠️ no Windows é passthrough                                     |
 | Slash commands `/goal /compact /plan /auto /rewind …`                         | `src/cli/repl.ts` + composer          | ✅ parcial no Desktop; `/auto`, `/rewind` seguem só no terminal |
 
@@ -778,9 +779,9 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
   fluxo de confirmação normal; as skills não concedem permissões.
 - O pack externo de JSON UI citado em `SEARCH.md` não foi copiado porque não declara licença.
   As skills locais são conteúdo novo; não incluem MCP, Studio, renderer ou ferramentas externas.
-- RubyCLI foi enviado em `70e9e2d` (Skills e leitura rápida) e `9eb5139` (paths Windows nos runners
-  POSIX). `ruby-engine.lock.json` e `RUBYCLI_REF` apontam para `9eb5139`; `npm run build` do
-  Desktop passou e verificou **41 Skills** no bundle.
+- RubyCLI foi enviado em `70e9e2d` (Skills e leitura rápida), `9eb5139` (paths Windows nos runners
+  POSIX) e `b02ca4e` (timeout de startup mais estável no smoke Windows). `ruby-engine.lock.json` e
+  `RUBYCLI_REF` apontam para `b02ca4e`; `npm run build` do Desktop passou e verificou **41 Skills**.
 - O candidato Desktop `0.1.4` ainda não foi marcado: o workflow protegido exige certificado
   Windows e certificado/credenciais Apple, que não estão configurados no repositório.
 

@@ -8,7 +8,7 @@
 
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e o M8 (Skills de modding Minecraft) estão implementados.
 A hardening pass de `FIX.md` também foi implementada no Desktop. O candidato `v0.1.4` fixa o
-RubyCLI em `9eb5139bac73ac6a629ff3dcd6177c8871ee3dd7` e inclui 41 Skills embutidas. A release
+RubyCLI em `b02ca4e9ca744cea007258cc454479e179020a41` e inclui 41 Skills embutidas. A release
 `v0.1.3` continua sendo a mais recente publicada; o workflow atual exige certificados de assinatura
 e notarização para publicar Windows/macOS. A próxima etapa de produto planejada é M7 (anexos de
 imagem e geração de imagens). O workflow compila a engine do repositório próprio no GitHub, sem
@@ -17,15 +17,16 @@ depender da publicação no npm.
 ### Verificação atual — 2026-10-17
 
 - RubyCLI: typecheck, ESLint, Prettier e build passaram. O commit `70e9e2d` adiciona 28 Skills de
-  Minecraft e a ferramenta `read_skills`; `9eb5139` corrige a resolução de caminhos Windows nos
-  runners Linux/macOS. O bundle da engine contém 41 Skills e não deixa imports npm em runtime.
+  Minecraft e `read_skills`; `9eb5139` corrige caminhos Windows nos runners POSIX; `b02ca4e` dá
+  margem para iniciar o shell sob carga no Windows. O bundle contém 41 Skills e não deixa imports
+  npm em runtime.
 - RubyDesktop: `npm run build` passou com o novo pin; o bundle contém as mesmas 41 Skills. O build
   sem elevação foi bloqueado pelo sandbox ao resolver `browser-tools.ts` e passou ao repetir com a
   permissão de build necessária.
-- A CI anterior do Desktop falhou em cinco testes de resolução do shell nos runners Linux/macOS;
-  a correção está no novo commit do RubyCLI e a CI do candidato ainda precisa terminar. O hook local
-  executou o Vitest completo: 1165 passaram, 70 foram ignorados e os 21 casos live terminaram com
-  erro `3221226505` no Windows.
+- A CI anterior do Desktop falhou em cinco testes de resolução do shell em Linux/macOS e um caso
+  intermitente no Windows; as correções estão em `9eb5139` e `b02ca4e`. A nova execução com o pin
+  final ainda precisa terminar. O hook local executou o Vitest completo: 1165 passaram, 70 foram
+  ignorados e os 21 casos live terminaram com erro `3221226505` no Windows.
 - A CI agora empacota e verifica o diretório instalado em Windows, macOS e Linux; quando o secret
   `RUBY_API_KEY` existe, executa os seis smoke scripts em cada runner (Linux via Xvfb).
 - A release exige assinatura/notarização de Windows e macOS, valida o feed e seus assets antes de
@@ -373,7 +374,7 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 | Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
-| **Publicar `v0.1.4`**             | O candidato Desktop já fixa RubyCLI `9eb5139`; o workflow protegido exige assinatura Windows e macOS | Configurar certificados/credenciais de assinatura e notarização para iniciar a release |
+| **Publicar `v0.1.4`**             | O candidato Desktop já fixa RubyCLI `b02ca4e`; o workflow protegido exige assinatura Windows e macOS | Configurar certificados/credenciais de assinatura e notarização para iniciar a release |
 | **CI/release**                    | Os smokes live dependem do provider e da chave; a release também depende dos certificados     | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` e credenciais de assinatura quando disponíveis |
 
 ---
