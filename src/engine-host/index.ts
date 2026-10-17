@@ -1966,7 +1966,9 @@ async function handle(request: EngineRequest): Promise<void> {
 
       const transcript = await restoreLatestSession();
       await buildAgent();
-      await reportSessions(transcript);
+      // The renderer clears the previous workspace transcript on `ready`. Send
+      // that boundary before the restored session, or switching projects can
+      // briefly load the right history and then erase it in the ready handler.
       post({
         type: "ready",
         workspace: process.cwd(),
@@ -1977,6 +1979,7 @@ async function handle(request: EngineRequest): Promise<void> {
         keySource,
         permissionMode,
       });
+      await reportSessions(transcript);
       post({ type: "status", status: "ready" });
       postGrants();
       await reportGoal();
