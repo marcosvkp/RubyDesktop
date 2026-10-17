@@ -47,9 +47,11 @@ Abra [Releases](https://github.com/marcosvkp/RubyDesktop/releases/latest) e esco
 
 | Plataforma | Arquivos |
 | --- | --- |
-| **Windows** | `Ruby.Desktop-<versão>-win-x64.exe` para x64, `win-arm64.exe` para ARM64 ou `win.exe` universal. |
+| **Windows** | `ruby-desktop-<versão>-win-x64.exe` para x64, `win-arm64.exe` para ARM64 ou `win.exe` combinado. |
 | **macOS** | Arquivo `.dmg` ou `.zip` para `mac-x64` (Intel) ou `mac-arm64` (Apple Silicon). |
 | **Linux** | `.AppImage` ou `.deb` para `amd64`. |
+
+Atualmente, a release `v0.1.4` contém apenas os três instaladores Windows (x64, ARM64 e combinado). Os artefatos macOS e Linux da release anterior continuam disponíveis no histórico de [Releases](https://github.com/marcosvkp/RubyDesktop/releases).
 
 Os instaladores Windows e macOS podem exibir avisos do sistema enquanto os pacotes não tiverem assinatura de código.
 
