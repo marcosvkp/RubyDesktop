@@ -101,7 +101,7 @@ O engine é executado em um processo Node separado do processo principal do Elec
 
 Os workflows usam um checkout reproduzível do engine. Configure a variável de repositório `RUBYCLI_REF` com o SHA completo de 40 caracteres do commit RubyCLI que deve acompanhar a versão do Desktop. `RUBYCLI_REPOSITORY` é opcional e, quando omitida, usa `marcosvkp/rubycli`.
 
-O workflow de release exige assinatura para Windows e macOS e valida os feeds de atualização antes de publicar um rascunho. Configure `WIN_CSC_LINK` e `WIN_CSC_KEY_PASSWORD` (ou `WIN_CSC_NAME`) para Windows; para macOS, configure `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Sem esses certificados e credenciais, a release falha deliberadamente em vez de publicar instaladores que o sistema operacional rejeitaria ou feeds inconsistentes. O Linux publica AppImage e `.deb` com feed próprio.
+O workflow publica instaladores Windows e macOS mesmo sem certificados. Nesses builds, o sistema operacional pode exibir avisos e o app oferece abrir a página da release para baixar uma nova versão; a atualização automática nessas plataformas exige assinatura. Quando os certificados estiverem configurados, o workflow valida assinatura/notarização e inclui os feeds de update. Configure `WIN_CSC_LINK` e `WIN_CSC_KEY_PASSWORD` (ou `WIN_CSC_NAME`) para Windows; para macOS, configure `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. O Linux publica AppImage e `.deb` com feed próprio.
 
 Para executar os smokes de permissões, MCP e browser em CI, disponibilize `RUBY_API_KEY` como secret. Os smokes de Markdown e histórico de sessões não precisam de uma chamada de modelo.
 

@@ -9,8 +9,9 @@
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e o M8 (Skills de modding Minecraft) estão implementados.
 A hardening pass de `FIX.md` também foi implementada no Desktop. O candidato `v0.1.4` fixa o
 RubyCLI em `b02ca4e9ca744cea007258cc454479e179020a41` e inclui 41 Skills embutidas. A release
-`v0.1.3` continua sendo a mais recente publicada; o workflow atual exige certificados de assinatura
-e notarização para publicar Windows/macOS. A próxima etapa de produto planejada é M7 (anexos de
+`v0.1.3` continua sendo a mais recente publicada; o workflow permite publicar Windows/macOS sem
+assinatura, com verificação de assinatura/notarização quando os certificados forem configurados. A
+próxima etapa de produto planejada é M7 (anexos de
 imagem e geração de imagens). O workflow compila a engine do repositório próprio no GitHub, sem
 depender da publicação no npm.
 
@@ -29,9 +30,9 @@ depender da publicação no npm.
   ignorados e os 21 casos live terminaram com erro `3221226505` no Windows.
 - A CI agora empacota e verifica o diretório instalado em Windows, macOS e Linux; quando o secret
   `RUBY_API_KEY` existe, executa os seis smoke scripts em cada runner (Linux via Xvfb).
-- A release exige assinatura/notarização de Windows e macOS, valida o feed e seus assets antes de
-  criar/atualizar um draft e recusa alterar uma release publicada. O coletor limpa o staging e só
-  inclui assets da versão atual.
+- A release aceita builds unsigned de Windows/macOS, emite aviso e omite os feeds dessas plataformas;
+  quando os certificados estão configurados, valida assinatura/notarização e os feeds. Linux mantém
+  seu feed. O coletor limpa o staging e só inclui assets da versão atual.
 - `RUBYCLI_REF` agora é obrigatório e deve ser o SHA completo de 40 caracteres do commit RubyCLI;
   CI e release falham cedo se a variável faltar ou divergir do `ruby-engine.lock.json`.
 - A blocklist catastrófica também é aplicada em `decideConfirmation` no RubyCLI; grants `bash:*`
@@ -43,9 +44,10 @@ depender da publicação no npm.
   os caminhos de update automático/fallback/instalação e o modo Node stdio do executável empacotado
   em Windows/macOS/Linux (caminho usado por subprocessos MCP).
 - `RUBYCLI_REF` foi atualizado para o SHA novo. Não há segredos de code signing/notarização no
-  repositório; por isso, não foi criada a tag `v0.1.4` e o workflow protegido não pode publicar
-  ainda os instaladores Windows/macOS. Também falta rodar os seis smokes com provider disponível e
-  validar os instaladores abrindo/instalando em Windows/macOS/Linux (incluindo MCP stdio no pacote).
+  repositório; o workflow agora pode publicar instaladores unsigned de Windows/macOS, que podem
+  mostrar avisos do sistema e não terão update automático. Ainda falta rodar os seis smokes com
+  provider disponível e validar os instaladores abrindo/instalando em Windows/macOS/Linux (incluindo
+  MCP stdio no pacote).
 
 ### Histórico de validação — 2026-10-13
 
@@ -204,10 +206,12 @@ a CI não espera publicação no npm. A tag deve corresponder a `package.json` (
 O workflow por tag cria um draft; `workflow_dispatch` também só atualiza um draft e recusa alterar
 uma release publicada.
 
-O workflow de release exige assinatura Windows (`WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` ou
-`WIN_CSC_NAME`) e assinatura/notarização macOS (`MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`). Configure `RUBY_API_KEY` para os smokes que chamam
-o provider. Builds locais sem publicação continuam possíveis sem certificados.
+O workflow de release publica instaladores unsigned de Windows/macOS quando os certificados não
+estão configurados; esses pacotes podem exibir avisos do sistema e não têm update automático. Para
+assiná-los e publicar os feeds correspondentes, configure `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD`
+(ou `WIN_CSC_NAME`) e, no macOS, `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Configure `RUBY_API_KEY` para os smokes que chamam
+o provider. Builds locais sem publicação também continuam possíveis sem certificados.
 
 ### M7 planejado — Anexos e geração de imagens (não implementado)
 
@@ -374,8 +378,8 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 | Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
-| **Publicar `v0.1.4`**             | O candidato Desktop já fixa RubyCLI `b02ca4e`; o workflow protegido exige assinatura Windows e macOS | Configurar certificados/credenciais de assinatura e notarização para iniciar a release |
-| **CI/release**                    | Os smokes live dependem do provider e da chave; a release também depende dos certificados     | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` e credenciais de assinatura quando disponíveis |
+| **Publicar `v0.1.4`**             | O candidato Desktop já fixa RubyCLI `b02ca4e`; builds sem assinatura exibem avisos do sistema e não recebem update automático | Criar a tag quando a CI do workflow atualizado passar; configurar certificados antes de distribuir amplamente |
+| **CI/release**                    | Os smokes live dependem do provider e da chave; assinaturas são opcionais no fluxo atual       | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` para executar os smokes live |
 
 ---
 

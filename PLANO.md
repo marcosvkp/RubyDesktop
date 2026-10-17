@@ -684,11 +684,13 @@ repositório. A revisão é verificada contra `ruby-engine.lock.json`. A tag de 
 `v<package.json.version>`;
 `v0.1.3` corresponde à versão publicada atual.
 
-O workflow de release exige certificado Windows (`WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` ou
-`WIN_CSC_NAME`) e certificado/notarização macOS (`MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`). Sem esses segredos a publicação falha antes de
-gerar assets de update inválidos. Para empacotar localmente sem publicar, os certificados não são
-necessários. Configure `RUBY_API_KEY` como secret para executar os seis smokes no CI.
+O workflow permite publicar instaladores Windows/macOS sem certificados; o sistema pode exibir
+avisos e o app abre a página de downloads quando há uma nova versão. Com os segredos de assinatura
+configurados, o workflow valida os binários e inclui os feeds de atualização automática. Configure
+`WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` (ou `WIN_CSC_NAME`) para Windows e
+`MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`
+para macOS. Linux sempre publica AppImage, `.deb` e o feed próprio. Configure `RUBY_API_KEY` como
+secret para executar os seis smokes no CI.
 
 **Verificação M5:** a release `v0.1.3` foi construída e publicada pelo workflow multiplataforma; os
 19 artefatos incluem instaladores para Windows x64/arm64/combinado, Linux AppImage/deb e macOS

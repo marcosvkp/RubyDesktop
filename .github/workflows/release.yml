@@ -34,15 +34,15 @@ jobs:
     env:
       RUBY_DESKTOP_GITHUB_REPOSITORY: ${{ github.repository }}
       RUBY_DESKTOP_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-      RUBY_DESKTOP_REQUIRE_SIGNING: ${{ matrix.platform != 'linux' }}
-      RUBY_DESKTOP_UPDATES_ENABLED: "true"
-      CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
-      CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-      APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-      APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
-      WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK || '' }}
-      WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+      RUBY_DESKTOP_REQUIRE_SIGNING: ${{ (matrix.platform == 'windows' && ((secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '') || vars.WIN_CSC_NAME != '')) || (matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '') }}
+      RUBY_DESKTOP_UPDATES_ENABLED: ${{ matrix.platform == 'linux' || (matrix.platform == 'windows' && ((secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '') || vars.WIN_CSC_NAME != '')) || (matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '') }}
+      CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && secrets.MAC_CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_TEAM_ID || '' }}
+      WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '' && secrets.WIN_CSC_LINK || '' }}
+      WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
       WIN_CSC_NAME: ${{ matrix.platform == 'windows' && vars.WIN_CSC_NAME || '' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -94,7 +94,7 @@ jobs:
         run: node scripts/verify-package.cjs release
 
       - name: Verify Windows signatures
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && env.RUBY_DESKTOP_REQUIRE_SIGNING == 'true'
         working-directory: ${{ github.workspace }}/RubyDesktop
         shell: pwsh
         run: |
@@ -106,7 +106,7 @@ jobs:
           }
 
       - name: Verify macOS signature and notarization
-        if: matrix.platform == 'macos'
+        if: matrix.platform == 'macos' && env.RUBY_DESKTOP_REQUIRE_SIGNING == 'true'
         working-directory: ${{ github.workspace }}/RubyDesktop
         shell: bash
         run: |
@@ -117,6 +117,11 @@ jobs:
             spctl --assess --type execute --verbose "$app"
             xcrun stapler validate "$app"
           done
+
+      - name: Report unsigned platform build
+        if: (matrix.platform == 'windows' || matrix.platform == 'macos') && env.RUBY_DESKTOP_REQUIRE_SIGNING != 'true'
+        shell: bash
+        run: echo "::warning::${{ matrix.platform }} packages are unsigned; OS warnings may appear and automatic updates are unavailable for this platform."
 
       - name: Collect installers and update metadata
         working-directory: ${{ github.workspace }}/RubyDesktop
@@ -159,5 +164,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --draft \
               --title "Ruby Desktop $tag" \
-              --notes "Instaladores e metadados de atualização do Ruby Desktop. Revise os artefatos antes de publicar esta release."
+              --notes "Instaladores e metadados de atualização do Ruby Desktop. Revise os artefatos antes de publicar esta release. Windows e macOS podem exibir avisos do sistema e não oferecem atualização automática enquanto os pacotes não tiverem assinatura configurada."
           fi
