@@ -36,7 +36,7 @@ O aplicativo reúne conversa, ferramentas, permissões, navegador, sessões e m�
 | **Subagentes** | Delegue exploração ou implementação, escolha modelo e esforço de raciocínio, dê orientações e revise o diff antes de aplicá-lo. Workers trabalham em um Git worktree isolado. |
 | **Perguntas interativas** | Responda perguntas do agente no próprio chat, com texto livre, escolha única, múltipla escolha e páginas de perguntas. |
 | **Browser integrado** | Abra páginas HTTP/HTTPS em abas próprias e deixe o agente navegar e interagir com a página. |
-| **MCP e Skills** | Conecte ferramentas MCP, descubra Skills disponíveis e crie uma Skill de projeto com `/new-skill`. |
+| **MCP e Skills** | Conecte ferramentas MCP, use 41 Skills embutidas (incluindo 28 para Minecraft) e crie uma Skill de projeto com `/new-skill`. |
 | **Sessões e workspaces recentes** | Retome conversas salvas e volte rapidamente aos projetos usados recentemente. |
 | **Métricas da sessão** | Consulte turnos, etapas, tokens, cache, uso da janela de contexto e, quando disponível, tempos e velocidade. |
 | **Atualizações** | O app verifica as releases do GitHub ao iniciar. Pacotes assinados podem baixar e instalar atualizações; nos demais, o app avisa quando há uma nova versão e abre a página de download. |

@@ -3,8 +3,8 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · release `v0.1.3` publicada · M7 planejado**
-Data: 2026-10-14
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · `v0.1.3` publicada · M8 implementado/pinado para candidato `v0.1.4` · M7 planejado**
+Data: 2026-10-17
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
 
@@ -16,9 +16,10 @@ macOS, com 19 artefatos. `npm run build` do Desktop passou. Nesta última valida
 do provider, `smoke-permissions` não completou uma segunda chamada ao provider e `smoke-mcp` não foi
 repetido. A suíte completa de smokes havia passado na etapa M6 anterior.
 
-RubyCLI build/typecheck/lint/format passaram; o Vitest reportou 1159 aprovados e 70 ignorados. Os
-21 casos live anteriores receberam `Invalid OpenAI API key` e foram seguidos por assertion de libuv
-no Node 24/Windows (`3221226505`).
+RubyCLI build/typecheck/lint/format passaram; o Vitest local executado pelo hook reportou 1165
+aprovados e 70 ignorados. Os 21 casos live falharam com assertion de libuv no Node 24/Windows
+(`3221226505`). A CI anterior do Desktop também encontrou cinco falhas de separação de caminhos
+Windows em Linux/macOS; corrigidas em `rubycli@9eb5139`, aguardando nova execução da CI.
 
 **Hardening `FIX-1` a `FIX-38` — 2026-10-14:** concluídas as correções aplicáveis ao Desktop:
 validação de IPC e navegação, blocklist e grants, encerramento/reset do engine, RPC e refs do
@@ -90,7 +91,7 @@ Li o repositório `github.com/marcosvkp/rubycli` (332 entradas, ~149 arquivos em
 | **Compact** + auto-compact em 75% do contexto                                 | `src/core/compact.ts`                 | ✅ pronto                                                       |
 | Sessões + snapshots/rewind                                                    | `src/state/session.ts`, `snapshot.ts` | ✅ pronto                                                       |
 | Permissões por projeto                                                        | `src/state/project-permissions.ts`    | ✅ pronto                                                       |
-| Skills (13 builtin, autocomplete e `/new-skill` no Desktop)                   | `src/skills/*`                        | ✅ pronto                                                       |
+| Skills (41 builtin: 13 gerais + 28 Minecraft; autocomplete no Desktop) | `src/skills/*`                   | ✅ engine publicado em `rubycli@9eb5139` e pinado no candidato Desktop `0.1.4` |
 | Sandbox de exec (macOS `sandbox-exec`, Linux `bwrap`, passthrough no Windows) | `src/tools/exec/sandbox/*`            | ⚠️ no Windows é passthrough                                     |
 | Slash commands `/goal /compact /plan /auto /rewind …`                         | `src/cli/repl.ts` + composer          | ✅ parcial no Desktop; `/auto`, `/rewind` seguem só no terminal |
 
@@ -764,6 +765,25 @@ compatível com a chave configurada e descobrir como o catálogo identifica essa
 **Decisões do primeiro spike:** endpoint Ruby e modelos de geração disponíveis, formatos e limites
 de upload, múltiplas imagens por mensagem, pasta de saída e aprovação para salvar no workspace.
 
+### M8 — Skills de modding Minecraft (implementadas e commitadas)
+
+Foram criadas 28 skills built-in originais em `RubyCLI/src/skills/builtin`, cobrindo Java
+(Fabric/NeoForge, Gradle, GameTest, Mixins, datagen, worldgen e multi-versão), Bedrock
+(packs, Script API, Molang, partículas, NBT, testes e edição de mundos), JSON UI, Blockbench,
+Paper, launcher, RCON e publicação. O roteador `/minecraft-mods` seleciona a especialidade; cada
+skill entra no catálogo automático e no autocomplete de slash commands já existente.
+
+- Skills consultam versão/loader e documentação oficial antes de assumir compatibilidade.
+- Publicação, comandos de servidor, instalação de ferramentas e escrita destrutiva continuam no
+  fluxo de confirmação normal; as skills não concedem permissões.
+- O pack externo de JSON UI citado em `SEARCH.md` não foi copiado porque não declara licença.
+  As skills locais são conteúdo novo; não incluem MCP, Studio, renderer ou ferramentas externas.
+- RubyCLI foi enviado em `70e9e2d` (Skills e leitura rápida) e `9eb5139` (paths Windows nos runners
+  POSIX). `ruby-engine.lock.json` e `RUBYCLI_REF` apontam para `9eb5139`; `npm run build` do
+  Desktop passou e verificou **41 Skills** no bundle.
+- O candidato Desktop `0.1.4` ainda não foi marcado: o workflow protegido exige certificado
+  Windows e certificado/credenciais Apple, que não estão configurados no repositório.
+
 ---
 
 ## 7. Riscos e mitigações
@@ -801,14 +821,15 @@ de upload, múltiplas imagens por mensagem, pasta de saída e aprovação para s
 | 11  | Revisão e merge dos workers        | **Mostrar diff, validar com `git apply --check` e só aplicar após ação explícita; conflito conserva o worktree para revisão.**                  |
 | 12  | Concorrência de subagentes         | **Limite de três agentes em execução simultânea.**                                                                                              |
 | 13  | Distribuição M5                    | **Release multiplataforma `v0.1.3` publicada via GitHub Actions após revisão manual. Builds sem assinatura no Windows/macOS oferecem download manual; instalação automática requer feed e assinatura.** |
+| 14  | Blocklist catastrófica em todos hosts | **RubyCLI consulta a blocklist em `decideConfirmation`; grants amplos/exatos não a sobrepõem e o override manual vale só uma execução (`ae45df6`).** |
+| 15  | Correlação de chamadas de ferramenta | **IDs opcionais do provider atravessam `AgentEvent` e JSONL; Desktop pareia por ID e mantém fallback para históricos antigos (`ae45df6`).** |
 
 ### Ainda abertas
 
-5. **Configurar CI:** definir `RUBYCLI_REF` com SHA de 40 caracteres igual ao lock do Desktop e `RUBY_API_KEY` para os smokes.
+5. **Publicar Desktop `v0.1.4`:** o engine já está commitado/pinado; configurar os certificados Windows e Apple exigidos pelo workflow e então criar a tag após CI verde.
 6. **Code signing:** cadastrar os certificados/credenciais Windows/macOS; o workflow já falha se estiverem ausentes.
 7. **Instaladores em execução:** instalar e abrir os pacotes em Windows, macOS e Linux, incluindo teste de MCP stdio no pacote.
-8. **FIX-4 upstream:** aplicar a consulta da blocklist catastrófica em `decideConfirmation` no RubyCLI para proteger todos os hosts; o Desktop já força aprovação pontual.
-9. **Correlação de ferramentas:** adicionar id de chamada em `AgentEvent` no RubyCLI e trocar a associação por nome do Desktop por correlação idêntica.
+8. **Chave de smoke da CI:** configurar `RUBY_API_KEY` quando o provider estiver disponível para executar smokes live.
 
 ---
 
@@ -823,17 +844,19 @@ de upload, múltiplas imagens por mensagem, pasta de saída e aprovação para s
 | Subagentes com workers e revisão         | ✅ M4.1–M4.3                                                                                 |
 | DSL de workflows                         | ✅ M4.4 com parser restrito, paralelismo e JSON Schema                                       |
 | Browser integrado controlado pelo agente | ✅ M3; múltiplas abas em M6                                                                  |
-| Skills                                   | ✅ já no engine (13 builtin)                                                                 |
+| Skills                                   | ✅ 41 no engine RubyCLI; pinado no candidato Desktop `0.1.4`                                 |
 | Terminal integrado                       | ✅ M3                                                                                        |
 | Permissões com aprovação                 | ✅ engine tem, UI em M2                                                                      |
-| Empacotamento Windows                    | ✅ M5: instaladores x64/arm64/combinado; `v0.1.3` publicada; assinatura opcional             |
+| Empacotamento Windows                    | ✅ M5: instaladores x64/arm64/combinado; `v0.1.3` publicada; `v0.1.4` aguarda assinatura      |
 | Provider plugável                        | ✅ já no engine + Ruby nativo                                                                |
 
 ---
 
 ## 10. Próximo passo
 
-M0–M6 foram entregues e a release `v0.1.3` está publicada. O próximo marco de produto proposto é M7:
+M0–M6 foram entregues e `v0.1.3` continua sendo a release mais recente. M8 já está no RubyCLI e no
+bundle local do Desktop `0.1.4`; falta concluir a CI e disponibilizar os certificados de assinatura
+para publicar os instaladores Windows/macOS. O próximo marco de produto proposto continua sendo M7:
 anexar imagens no chat para modelos com visão e disponibilizar uma tool de geração que use a chave
 Ruby já configurada e um modelo de imagem selecionável. Começar confirmando quais endpoints e modelos
 o provider oferece, pois capacidade de receber imagens não garante capacidade de gerar.

@@ -6,17 +6,26 @@
 > Para o _porquê_ das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
-**Estado:** M0–M6 e as etapas M3.5–M3.7/M4.1–M4.4 estão implementadas. A hardening pass de
-`FIX.md` também foi implementada no Desktop. A próxima etapa planejada é M7 (anexos de imagem e
-geração de imagens). A release `v0.1.3` foi
-publicada com instaladores para Windows, macOS e Linux. A versão inclui verificação de releases do
-GitHub ao iniciar; sem assinatura no Windows/macOS, o app encaminha o usuário ao download manual.
-O workflow compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
+**Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e o M8 (Skills de modding Minecraft) estão implementados.
+A hardening pass de `FIX.md` também foi implementada no Desktop. O candidato `v0.1.4` fixa o
+RubyCLI em `9eb5139bac73ac6a629ff3dcd6177c8871ee3dd7` e inclui 41 Skills embutidas. A release
+`v0.1.3` continua sendo a mais recente publicada; o workflow atual exige certificados de assinatura
+e notarização para publicar Windows/macOS. A próxima etapa de produto planejada é M7 (anexos de
+imagem e geração de imagens). O workflow compila a engine do repositório próprio no GitHub, sem
+depender da publicação no npm.
 
-### Verificação atual — 2026-10-14
+### Verificação atual — 2026-10-17
 
-- RubyDesktop: `npm run typecheck` e `npm run build` passaram; o bundle engine contém 13 Skills
-  builtin e não deixou imports npm em runtime. Os smokes não foram executados nesta rodada.
+- RubyCLI: typecheck, ESLint, Prettier e build passaram. O commit `70e9e2d` adiciona 28 Skills de
+  Minecraft e a ferramenta `read_skills`; `9eb5139` corrige a resolução de caminhos Windows nos
+  runners Linux/macOS. O bundle da engine contém 41 Skills e não deixa imports npm em runtime.
+- RubyDesktop: `npm run build` passou com o novo pin; o bundle contém as mesmas 41 Skills. O build
+  sem elevação foi bloqueado pelo sandbox ao resolver `browser-tools.ts` e passou ao repetir com a
+  permissão de build necessária.
+- A CI anterior do Desktop falhou em cinco testes de resolução do shell nos runners Linux/macOS;
+  a correção está no novo commit do RubyCLI e a CI do candidato ainda precisa terminar. O hook local
+  executou o Vitest completo: 1165 passaram, 70 foram ignorados e os 21 casos live terminaram com
+  erro `3221226505` no Windows.
 - A CI agora empacota e verifica o diretório instalado em Windows, macOS e Linux; quando o secret
   `RUBY_API_KEY` existe, executa os seis smoke scripts em cada runner (Linux via Xvfb).
 - A release exige assinatura/notarização de Windows e macOS, valida o feed e seus assets antes de
@@ -24,17 +33,18 @@ O workflow compila a engine do repositório próprio no GitHub, sem depender da 
   inclui assets da versão atual.
 - `RUBYCLI_REF` agora é obrigatório e deve ser o SHA completo de 40 caracteres do commit RubyCLI;
   CI e release falham cedo se a variável faltar ou divergir do `ruby-engine.lock.json`.
-- A blocklist catastrófica é aplicada no host Desktop, mas o fix mais abrangente de `FIX-4` ainda
-  depende de o RubyCLI também consultar `matchesNeverAutoApprove` dentro de `decideConfirmation`.
-- O contrato de eventos RubyCLI ainda não traz ids únicos em `tool_call`/`tool_result`; o Desktop
-  continua correlacionando chamadas homônimas por heurística até essa mudança upstream.
+- A blocklist catastrófica também é aplicada em `decideConfirmation` no RubyCLI; grants `bash:*`
+  e grants exatos não liberam comandos catastróficos. Confirmação manual permite só uma execução.
+- `tool_call` e `tool_result` agora podem carregar IDs do provider. O Desktop usa esses IDs para
+  correlacionar chamadas concorrentes e mantém fallback para sessões/eventos antigos sem ID.
 - Smokes determinísticos adicionados à CI: snapshot/diff/apply/cleanup de worktrees, proteção do
   diff revisado contra alterações posteriores, staging de releases sem assets antigos/feed quebrado,
   os caminhos de update automático/fallback/instalação e o modo Node stdio do executável empacotado
   em Windows/macOS/Linux (caminho usado por subprocessos MCP).
-- Falta rodar os seis smokes com provider disponível, validar os instaladores abrindo/instalando em
-  Windows/macOS/Linux (incluindo MCP stdio dentro do pacote) e configurar as Actions
-  variables/secrets antes de usar CI/release.
+- `RUBYCLI_REF` foi atualizado para o SHA novo. Não há segredos de code signing/notarização no
+  repositório; por isso, não foi criada a tag `v0.1.4` e o workflow protegido não pode publicar
+  ainda os instaladores Windows/macOS. Também falta rodar os seis smokes com provider disponível e
+  validar os instaladores abrindo/instalando em Windows/macOS/Linux (incluindo MCP stdio no pacote).
 
 ### Histórico de validação — 2026-10-13
 
@@ -260,9 +270,8 @@ completo de gramática; Shiki continua sendo uma opção se a fidelidade de sint
 ### 🟢 2.6 `AgentEvent` não enriquecido (dívida do M1)
 
 A union do engine ainda não tem `usage`, `approval_request`, `approval_resolved`, `turn_start`,
-`goal_updated`, `compact_start`/`done`, `subagent_*`, `mcp_status`.
-Ela também não inclui um id em `tool_call` e `tool_result`; o Desktop ainda associa resultados por
-nome e ordem, portanto duas chamadas simultâneas da mesma ferramenta podem ser ambíguas.
+`goal_updated`, `compact_start`/`done`, `subagent_*`, `mcp_status`. `tool_call` e `tool_result`
+já incluem IDs opcionais para pareamento; registros antigos e providers sem IDs usam fallback FIFO.
 
 **Não bloqueia**: o Desktop contorna com mensagens de IPC próprias (`approvalRequest`,
 `approvalResult`, `metric`, `goal`, `mcp`, `browserState`). A desvantagem é que o engine deixa
@@ -364,9 +373,8 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 | Questão                           | Por que importa                                                                                 | Recomendação                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
-| **Ref do RubyCLI na CI**          | Desktop usa `file:../RubyCLI`; CI clona um checkout irmão para compilar o engine                | Configurar `RUBYCLI_REF` como SHA completo de 40 caracteres compatível com `ruby-engine.lock.json` |
-| **IDs dos eventos de ferramenta** | `AgentEvent` do RubyCLI não fornece id de correlação para `tool_call`/`tool_result`              | Adicionar ids no RubyCLI; até lá o Desktop associa chamadas simultâneas por nome e ordem |
-| **CI/release**                    | Os workflows estão preparados, mas dependem de Actions variables/secrets do repositório        | Configurar `RUBYCLI_REF`, chave de smoke e certificados/credenciais de assinatura |
+| **Publicar `v0.1.4`**             | O candidato Desktop já fixa RubyCLI `9eb5139`; o workflow protegido exige assinatura Windows e macOS | Configurar certificados/credenciais de assinatura e notarização para iniciar a release |
+| **CI/release**                    | Os smokes live dependem do provider e da chave; a release também depende dos certificados     | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` e credenciais de assinatura quando disponíveis |
 
 ---
 
