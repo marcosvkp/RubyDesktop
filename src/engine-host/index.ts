@@ -18,6 +18,7 @@
  * would work under a plain Node supervisor.
  */
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   Agent,
   createClient,
@@ -60,8 +61,11 @@ import {
   McpManager,
   probeMcpServer,
   loadMcpConfig,
+  resolveMcpServerConfig,
   saveMcpServer,
   removeMcpServer,
+  isValidMcpServerName,
+  validateMcpServerConfig,
   AGENT_DIR,
 } from "@rubyclii/cli";
 import type {
@@ -69,6 +73,7 @@ import type {
   ConfirmFn,
   McpClientOpts,
   McpServerConfig,
+  Tool,
   ObservabilityEvent,
   PermissionMode,
   Provider,
@@ -100,6 +105,7 @@ import type {
   SkillSummary,
   SubAgentConfigRequest,
   SubAgentSummary,
+  SubAgentTranscriptEntry,
   UserQuestionAnswer,
   UserQuestionRequest,
 } from "@shared/ipc";
@@ -122,16 +128,21 @@ function post(message: EngineResponse): void {
 }
 
 /** Serializes session writes so UI annotations stay between the tool call and result they describe. */
-function logSessionEntry(entry: SessionLogEntry): Promise<void> {
-  const target = session;
+function logSessionEntry(
+  entry: SessionLogEntry,
+  target: Session | undefined = session,
+): Promise<void> {
   if (!target) return Promise.resolve();
   const write = sessionLogQueue.then(() => target.log(entry));
   sessionLogQueue = write.catch(() => {});
   return write;
 }
 
-function logSessionUiEvent(event: SessionUiEvent): Promise<void> {
-  return logSessionEntry({ type: "ui_event", event });
+function logSessionUiEvent(
+  event: SessionUiEvent,
+  target?: Session,
+): Promise<void> {
+  return logSessionEntry({ type: "ui_event", event }, target);
 }
 
 /** Report an unexpected failure without killing the process. */
@@ -163,6 +174,8 @@ let agent: Agent | undefined;
 let session: Session | undefined;
 let sessionMessages: Message[] = [];
 let sessionOutputTokens = 0;
+let latestContextTokens: number | undefined;
+let latestContextSource: "engine" | "provider" = "engine";
 let sessionLogQueue: Promise<void> = Promise.resolve();
 let toolCount = 0;
 let skillCount = 0;
@@ -171,11 +184,20 @@ let modelCatalog: ModelSummary[] = [];
 const worktrees = new WorktreeManager();
 const subAgentControllers = new Map<string, AbortController>();
 const subAgentRuns = new Map<string, Promise<string>>();
+const subAgentSessions = new Map<string, Session>();
+const subAgentSessionIds = new Map<string, string>();
+const latestSubAgentSummaries = new Map<string, SubAgentSummary>();
 const subAgentPostState = new Map<
   string,
-  { lastPostedAt: number; timer?: NodeJS.Timeout; latest?: SubAgentSummary }
+  {
+    lastPostedAt: number;
+    lastPersistedAt: number;
+    timer?: NodeJS.Timeout;
+    latest?: SubAgentSummary;
+  }
 >();
 const SUBAGENT_STREAM_THROTTLE_MS = 100;
+const SUBAGENT_CHECKPOINT_INTERVAL_MS = 5_000;
 const persistedSubAgentStatuses = new Map<string, SubAgentSummary["status"]>();
 const pendingSubAgentReviews = new Map<
   string,
@@ -219,6 +241,8 @@ const browserBridge = new BrowserBridge((id, method, params) => {
 // --- MCP --------------------------------------------------------------------
 
 let mcp: McpManager | undefined;
+let mcpToolNames = new Set<string>();
+let mcpManagementQueue: Promise<void> = Promise.resolve();
 
 /**
  * How long to wait for an MCP server to connect or list tools.
@@ -246,10 +270,16 @@ function toServerConfig(draft: McpServerDraft): McpServerConfig {
 }
 
 /**
- * Connects every configured MCP server. Does not report status: the caller must
- * register the tools first, or the UI would briefly see servers with no tools.
+ * Replaces the active MCP generation, removes stale tools, then reports status.
+ * This may run between model calls as well as during initial agent setup.
  */
-async function connectMcp(): Promise<void> {
+async function connectMcp(registry: ToolRegistry): Promise<void> {
+  // Remove the previous generation from the live registry before disconnecting
+  // its clients. Agent refreshes its offered schemas before each model call, so
+  // the next iteration sees exactly the tools from this generation.
+  for (const name of mcpToolNames) registry.unregister(name);
+  mcpToolNames = new Set<string>();
+
   // Drop the previous generation first: a reconnect must not leave orphaned
   // subprocesses behind, and the old manager's tools are about to be replaced.
   if (mcp) {
@@ -258,9 +288,21 @@ async function connectMcp(): Promise<void> {
   }
 
   const config = await loadMcpConfig(AGENT_DIR);
-  if (!config || Object.keys(config.mcpServers).length === 0) return;
+  if (!config || Object.keys(config.mcpServers).length === 0) {
+    toolCount = registry.all().length;
+    postMcpStatus();
+    return;
+  }
 
   mcp = await McpManager.create(config, mcpOpts());
+  await mcp.registerTools(registry);
+  for (const status of mcp.statuses) {
+    for (const tool of status.tools) {
+      mcpToolNames.add(`mcp__${status.sanitisedName}__${tool.name}`);
+    }
+  }
+  toolCount = registry.all().length;
+  postMcpStatus();
 }
 
 /** Reports MCP state. Call after connecting or after tools are registered. */
@@ -276,6 +318,223 @@ function postMcpStatus(): void {
     })),
   }));
   post({ type: "mcp", servers });
+}
+
+function isStringMap(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry) => typeof entry === "string")
+  );
+}
+
+function queueMcpManagement<T>(operation: () => Promise<T>): Promise<T> {
+  const next = mcpManagementQueue.then(operation, operation);
+  mcpManagementQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+function mcpConfigFromToolArgs(
+  args: Record<string, unknown>,
+): McpServerConfig | null {
+  if (args.transport === "stdio") {
+    if (typeof args.command !== "string") return null;
+    if (
+      args.args !== undefined &&
+      (!Array.isArray(args.args) ||
+        !args.args.every((v) => typeof v === "string"))
+    ) {
+      return null;
+    }
+    if (args.env !== undefined && !isStringMap(args.env)) return null;
+    return {
+      transport: "stdio",
+      command: args.command,
+      args: args.args as string[] | undefined,
+      env: args.env as Record<string, string> | undefined,
+    };
+  }
+
+  if (args.transport === "http") {
+    if (typeof args.url !== "string") return null;
+    if (args.headers !== undefined && !isStringMap(args.headers)) return null;
+    return {
+      transport: "http",
+      url: args.url,
+      headers: args.headers as Record<string, string> | undefined,
+    };
+  }
+
+  return null;
+}
+
+/** The chat-facing MCP control plane; mutating actions always go through approval. */
+function createMcpManagementTool(registry: ToolRegistry): Tool {
+  return {
+    name: "manage_mcp_servers",
+    description:
+      "List configured MCP servers, add a tested stdio or HTTP server, or remove a server. Adding and removing require user approval. Successful changes reconnect MCP servers and update the tools offered to you immediately.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "add", "remove"],
+          description: "Operation to perform.",
+        },
+        name: {
+          type: "string",
+          description: "Server name; letters, digits, _ and - only.",
+        },
+        transport: { type: "string", enum: ["stdio", "http"] },
+        command: {
+          type: "string",
+          description: "Executable for a stdio MCP server.",
+        },
+        args: { type: "array", items: { type: "string" } },
+        env: {
+          type: "object",
+          description:
+            "Optional environment variables for stdio. Use ${NAME} references for values managed outside the chat.",
+        },
+        url: { type: "string", description: "URL for an HTTP MCP server." },
+        headers: {
+          type: "object",
+          description:
+            "Optional HTTP headers. Use ${NAME} references for secrets managed outside the chat.",
+        },
+      },
+      required: ["action"],
+    },
+    readonly: false,
+    requiresConfirmation: (args) =>
+      args.action === "add" || args.action === "remove",
+    validate: (args) => {
+      if (
+        args.action !== "list" &&
+        args.action !== "add" &&
+        args.action !== "remove"
+      ) {
+        return "action must be list, add, or remove";
+      }
+      if (args.action === "list") return null;
+      if (typeof args.name !== "string" || !isValidMcpServerName(args.name)) {
+        return "name must contain only letters, digits, _ and -";
+      }
+      if (args.action === "remove") return null;
+      const config = mcpConfigFromToolArgs(args);
+      return config
+        ? validateMcpServerConfig(
+            resolveMcpServerConfig(args.name as string, config),
+          )
+        : "provide a valid stdio or HTTP server configuration";
+    },
+    execute: (args) =>
+      queueMcpManagement(async () => {
+        const action = args.action;
+        if (action === "list") {
+          const config = await loadMcpConfig(AGENT_DIR);
+          const statuses = new Map(
+            (mcp?.statuses ?? []).map((status) => [status.rawName, status]),
+          );
+          const servers = Object.entries(config?.mcpServers ?? {}).map(
+            ([name, server]) => {
+              const status = statuses.get(name);
+              return {
+                name,
+                transport: server.transport,
+                connected: status?.connected ?? false,
+                ...(status?.error ? { error: status.error } : {}),
+                tools:
+                  status?.tools.map(({ name: toolName, description }) => ({
+                    name: toolName,
+                    description,
+                  })) ?? [],
+              };
+            },
+          );
+          return {
+            success: true,
+            output: JSON.stringify({ servers }, null, 2),
+          };
+        }
+
+        const name = args.name as string;
+        if (action === "remove") {
+          const removed = await removeMcpServer(AGENT_DIR, name);
+          if (!removed)
+            return {
+              success: false,
+              output: "",
+              error: `No MCP server named '${name}' is configured.`,
+            };
+          await connectMcp(registry);
+          return {
+            success: true,
+            output: `Removed '${name}'. Remaining MCP servers reconnected and the tool list was refreshed.`,
+          };
+        }
+
+        const current = await loadMcpConfig(AGENT_DIR);
+        if (current?.mcpServers[name]) {
+          return {
+            success: false,
+            output: "",
+            error: `MCP server '${name}' already exists. Remove it before adding a replacement.`,
+          };
+        }
+
+        const serverConfig = mcpConfigFromToolArgs(args);
+        if (!serverConfig)
+          return {
+            success: false,
+            output: "",
+            error: "Provide a valid stdio or HTTP server configuration.",
+          };
+
+        const resolvedConfig = resolveMcpServerConfig(name, serverConfig);
+        const probe = await probeMcpServer(name, resolvedConfig, mcpOpts());
+        if (!probe.connected) {
+          return {
+            success: false,
+            output: "",
+            error: `MCP server '${name}' did not connect: ${probe.error ?? "unknown error"}. Nothing was saved.`,
+          };
+        }
+
+        await saveMcpServer(AGENT_DIR, name, serverConfig);
+        try {
+          await connectMcp(registry);
+        } catch (error) {
+          await removeMcpServer(AGENT_DIR, name).catch(() => false);
+          await connectMcp(registry).catch(() => {});
+          return {
+            success: false,
+            output: "",
+            error: `MCP server '${name}' could not be activated; its config was rolled back: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+        const active = mcp?.statuses.find((status) => status.rawName === name);
+        if (!active?.connected || active.error) {
+          await removeMcpServer(AGENT_DIR, name);
+          await connectMcp(registry);
+          return {
+            success: false,
+            output: "",
+            error: `MCP server '${name}' passed its test but failed during activation; its config was rolled back.`,
+          };
+        }
+
+        return {
+          success: true,
+          output: `Added '${name}' and connected it. ${active.tools.length} MCP tool(s) are available in the next model call.`,
+        };
+      }),
+  };
 }
 
 async function handleMcp(
@@ -349,8 +608,20 @@ async function handleMcp(
  * trips, none of which belong in the transcript the model sees.
  */
 function onObservability(event: ObservabilityEvent, agentId?: string): void {
-  if (!agentId && event.type === "llm_call_end")
+  if (!agentId && event.type === "context_snapshot") {
+    latestContextTokens = event.estimatedTokens;
+    latestContextSource = "engine";
+    reportUsage();
+    return;
+  }
+  if (!agentId && event.type === "llm_call_end") {
     sessionOutputTokens += event.outputTokens;
+    if (event.inputTokens > 0) {
+      latestContextTokens = event.inputTokens;
+      latestContextSource = "provider";
+    }
+    reportUsage();
+  }
   if (!agentId && event.type === "llm_call_start") {
     post({
       type: "turnProgress",
@@ -477,6 +748,7 @@ interface PendingSubAgentConfig {
 
 const pendingUserQuestions = new Map<string, PendingUserQuestion>();
 const pendingSubAgentConfigs = new Map<string, PendingSubAgentConfig>();
+const askForSubAgentConfig = new AsyncLocalStorage<boolean>();
 
 /**
  * How long the engine waits for a human before denying.
@@ -599,11 +871,12 @@ function handleUserQuestionResponse(
   pending.settle({ answers: safeAnswers, cancelled: false });
 }
 
-/** Lets the user inspect and edit a model-authored worker configuration before it runs. */
-async function requestSubAgentConfig(
+/** Resolve a valid proposal from the current catalog, falling back to the selected model. */
+function prepareSubAgentConfigRequest(
   prompt: string,
   options: SpawnSubAgentOptions,
-): Promise<ResolvedSubAgentConfig | null> {
+  allowCatalogless = false,
+): SubAgentConfigRequest {
   const requestedModel = options.model ?? model;
   let proposedModel = requestedModel;
   let modelInfo = modelCatalog.find((entry) => entry.id === proposedModel);
@@ -611,29 +884,39 @@ async function requestSubAgentConfig(
   if (!modelInfo) {
     modelInfo =
       modelCatalog.find((entry) => entry.id === model) ?? modelCatalog[0];
-    if (!modelInfo)
+    if (!modelInfo && !allowCatalogless)
       throw new Error(
         "The model catalog is unavailable; no sub-agent was started.",
       );
-    proposedModel = modelInfo.id;
-    notes.push(
-      `O modelo '${requestedModel}' não está no catálogo atual. Revise a alternativa proposta: '${proposedModel}'.`,
-    );
+    if (modelInfo) {
+      proposedModel = modelInfo.id;
+      notes.push(
+        `O modelo '${requestedModel}' não está no catálogo atual. Alternativa selecionada: '${proposedModel}'.`,
+      );
+    } else {
+      proposedModel = model;
+      notes.push(
+        `O catálogo de modelos não está disponível; usando o modelo atual '${model}'.`,
+      );
+    }
   }
-  const efforts = modelInfo.reasoningEfforts ?? [];
+  const efforts = modelInfo?.reasoningEfforts ?? [];
   const proposedEffort =
-    options.reasoningEffort && efforts.includes(options.reasoningEffort)
+    options.reasoningEffort && modelInfo && efforts.includes(options.reasoningEffort)
       ? options.reasoningEffort
       : undefined;
-  if (options.reasoningEffort && !proposedEffort) {
+  if (options.reasoningEffort && modelInfo && !proposedEffort) {
     notes.push(
       `O modelo '${proposedModel}' não oferece o effort '${options.reasoningEffort}'. Escolha outro modelo ou effort.`,
     );
+  } else if (options.reasoningEffort && !modelInfo) {
+    notes.push(
+      `O catálogo está indisponível; o effort '${options.reasoningEffort}' foi omitido para evitar enviar um valor incompatível.`,
+    );
   }
 
-  const id = randomUUID();
-  const request: SubAgentConfigRequest = {
-    id,
+  return {
+    id: randomUUID(),
     title: options.title,
     prompt,
     role: options.role,
@@ -642,6 +925,31 @@ async function requestSubAgentConfig(
     proposedInstructions: options.instructions ?? "",
     ...(notes.length ? { proposalNote: notes.join(" ") } : {}),
   };
+}
+
+/** Starts immediately with the validated recommendation; no renderer prompt is opened. */
+function resolveAutomaticSubAgentConfig(
+  prompt: string,
+  options: SpawnSubAgentOptions,
+): ResolvedSubAgentConfig {
+  const request = prepareSubAgentConfigRequest(prompt, options, true);
+  return {
+    id: request.id,
+    model: request.proposedModel,
+    ...(request.proposedReasoningEffort
+      ? { reasoningEffort: request.proposedReasoningEffort }
+      : {}),
+    instructions: request.proposedInstructions,
+  };
+}
+
+/** Lets the user inspect and edit a model-authored worker configuration before it runs. */
+async function requestSubAgentConfig(
+  prompt: string,
+  options: SpawnSubAgentOptions,
+): Promise<ResolvedSubAgentConfig | null> {
+  const request = prepareSubAgentConfigRequest(prompt, options);
+  const id = request.id;
 
   await logSessionUiEvent({
     version: 1,
@@ -1023,24 +1331,60 @@ async function loadPermissions(): Promise<void> {
 }
 
 function postSubAgent(agent: SubAgentSummary): void {
+  const transcript = agent.transcript?.slice(-80).map((entry) => {
+    if (entry.kind === "tool") {
+      return {
+        ...entry,
+        ...(entry.result ? { result: entry.result.slice(-3_000) } : {}),
+      };
+    }
+    return { ...entry, text: entry.text.slice(-12_000) };
+  });
+  if (transcript) {
+    let totalChars = transcript.reduce(
+      (total, entry) =>
+        total +
+        (entry.kind === "tool"
+          ? entry.name.length + (entry.result?.length ?? 0)
+          : entry.text.length),
+      0,
+    );
+    while (transcript.length > 1 && totalChars > 48_000) {
+      const removed = transcript.shift();
+      if (removed) {
+        totalChars -=
+          removed.kind === "tool"
+            ? removed.name.length + (removed.result?.length ?? 0)
+            : removed.text.length;
+      }
+    }
+  }
   const snapshot: SubAgentSummary = {
     ...agent,
     ...(agent.output ? { output: agent.output.slice(-12_000) } : {}),
+    ...(transcript ? { transcript } : {}),
     ...(agent.diff ? { diff: agent.diff.slice(0, 120_000) } : {}),
     ...(agent.changedFiles
       ? { changedFiles: agent.changedFiles.slice(0, 200) }
       : {}),
   };
+  latestSubAgentSummaries.set(agent.id, snapshot);
+  const agentSession = subAgentSessions.get(agent.id);
+  const now = Date.now();
   const previous = persistedSubAgentStatuses.get(agent.id);
-  const shouldPersist = previous !== agent.status;
-  const state = subAgentPostState.get(agent.id) ?? { lastPostedAt: 0 };
+  const statusChanged = previous !== agent.status;
+  const state = subAgentPostState.get(agent.id) ?? {
+    lastPostedAt: 0,
+    lastPersistedAt: 0,
+  };
   subAgentPostState.set(agent.id, state);
   const emit = (value: SubAgentSummary): void => {
     state.lastPostedAt = Date.now();
     state.latest = undefined;
-    post({ type: "subAgentUpdate", agent: value });
+    if (subAgentSessionIds.get(agent.id) === session?.id)
+      post({ type: "subAgentUpdate", agent: value });
   };
-  if (shouldPersist || Date.now() - state.lastPostedAt >= SUBAGENT_STREAM_THROTTLE_MS) {
+  if (statusChanged || now - state.lastPostedAt >= SUBAGENT_STREAM_THROTTLE_MS) {
     if (state.timer) clearTimeout(state.timer);
     state.timer = undefined;
     emit(snapshot);
@@ -1050,17 +1394,69 @@ function postSubAgent(agent: SubAgentSummary): void {
       state.timer = setTimeout(() => {
         state.timer = undefined;
         if (state.latest) emit(state.latest);
-      }, SUBAGENT_STREAM_THROTTLE_MS - (Date.now() - state.lastPostedAt));
+      }, SUBAGENT_STREAM_THROTTLE_MS - (now - state.lastPostedAt));
     }
   }
-  if (shouldPersist) {
+  if (
+    statusChanged ||
+    now - state.lastPersistedAt >= SUBAGENT_CHECKPOINT_INTERVAL_MS
+  ) {
     persistedSubAgentStatuses.set(agent.id, agent.status);
-    void logSessionUiEvent({
-      version: 1,
-      kind: "subagent",
-      id: agent.id,
-      data: { agent: snapshot },
-    });
+    state.lastPersistedAt = now;
+    void logSessionUiEvent(
+      {
+        version: 1,
+        kind: "subagent",
+        id: agent.id,
+        data: { agent: snapshot },
+      },
+      agentSession,
+    );
+  }
+}
+
+/** Rebuild child-agent state from the selected conversation's saved UI events. */
+function restoreSubAgentSummaries(
+  sessionId: string,
+  entries: SessionEntry[],
+): void {
+  const restored = new Map<string, SubAgentSummary>();
+  for (const entry of entries) {
+    if (
+      entry.type !== "ui_event" ||
+      entry.event.version !== 1 ||
+      entry.event.kind !== "subagent"
+    )
+      continue;
+    const candidate = entry.event.data.agent;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      continue;
+    const summary = candidate as Partial<SubAgentSummary>;
+    if (
+      typeof summary.id !== "string" ||
+      typeof summary.title !== "string" ||
+      typeof summary.role !== "string" ||
+      typeof summary.model !== "string" ||
+      typeof summary.status !== "string"
+    )
+      continue;
+    const valid = summary as SubAgentSummary;
+    const recovered =
+      !subAgentRuns.has(valid.id) &&
+      ["queued", "running", "review", "merging"].includes(valid.status)
+        ? {
+            ...valid,
+            status: "interrupted" as const,
+            progress: "Execução interrompida ao fechar o app",
+          }
+        : valid;
+    restored.set(valid.id, recovered);
+    subAgentSessionIds.set(valid.id, sessionId);
+    persistedSubAgentStatuses.set(valid.id, recovered.status);
+  }
+  for (const [id, summary] of restored) {
+    // Preserve any newer live state that arrived after the last disk checkpoint.
+    if (!subAgentRuns.has(id)) latestSubAgentSummaries.set(id, summary);
   }
 }
 
@@ -1119,6 +1515,11 @@ async function runSubAgent(
   config: ResolvedSubAgentConfig,
 ): Promise<string> {
   const id = config.id;
+  const runSession = session;
+  if (runSession) {
+    subAgentSessions.set(id, runSession);
+    subAgentSessionIds.set(id, runSession.id);
+  }
   const controller = new AbortController();
   subAgentControllers.set(id, controller);
   const usage = {
@@ -1128,6 +1529,8 @@ async function runSubAgent(
     llmCalls: 0,
     toolCalls: 0,
   };
+  const transcript: SubAgentTranscriptEntry[] = [];
+  let transcriptSequence = 0;
   const summary: SubAgentSummary = {
     id,
     title: options.title,
@@ -1141,6 +1544,17 @@ async function runSubAgent(
     status: "queued",
     progress: "Aguardando uma vaga de execução",
     usage,
+    transcript,
+  };
+  const recordNotice = (text: string): void => {
+    transcript.push({
+      id: `${id}-event-${++transcriptSequence}`,
+      kind: "notice",
+      text,
+      createdAt: Date.now(),
+    });
+    summary.transcript = transcript;
+    postSubAgent({ ...summary, usage: { ...usage } });
   };
   postSubAgent(summary);
 
@@ -1186,7 +1600,9 @@ async function runSubAgent(
     if (options.role === "explorer") {
       childTools = new ToolRegistry();
       for (const tool of available.all())
-        if (tool.readonly && tool.name !== "web_fetch") childTools.register(tool);
+        if (tool.readonly && tool.name !== "web_fetch" && tool.name !== "web_search") {
+          childTools.register(tool);
+        }
     }
     const childSkills = new SkillRegistry();
     await childSkills.discover(workspaceRoot);
@@ -1245,13 +1661,72 @@ async function runSubAgent(
       if (event.type === "text") {
         output += event.text;
         summary.output = output.slice(-12_000);
+        const last = transcript[transcript.length - 1];
+        if (last?.kind === "assistant") {
+          last.text = (last.text + event.text).slice(-12_000);
+        } else {
+          transcript.push({
+            id: `${id}-event-${++transcriptSequence}`,
+            kind: "assistant",
+            text: event.text.slice(-12_000),
+            createdAt: Date.now(),
+          });
+        }
+        summary.transcript = transcript;
         postSubAgent({ ...summary, usage: { ...usage } });
       } else if (event.type === "tool_call") {
         summary.progress = `Usando ${event.name}`;
+        transcript.push({
+          id: `${id}-event-${++transcriptSequence}`,
+          kind: "tool",
+          name: event.name,
+          status: "running",
+          ...(event.id ? { toolCallId: event.id } : {}),
+          createdAt: Date.now(),
+        });
+        summary.transcript = transcript;
         postSubAgent({ ...summary, usage: { ...usage } });
       } else if (event.type === "tool_result") {
         summary.progress = `Concluiu ${event.name}`;
+        let tool = event.id
+          ? transcript.find(
+              (entry) =>
+                entry.kind === "tool" && entry.toolCallId === event.id,
+            )
+          : undefined;
+        if (!tool) {
+          for (let index = transcript.length - 1; index >= 0; index--) {
+            const candidate = transcript[index];
+            if (
+              candidate?.kind === "tool" &&
+              candidate.status === "running" &&
+              candidate.name === event.name
+            ) {
+              tool = candidate;
+              break;
+            }
+          }
+        }
+        if (tool?.kind === "tool") {
+          tool.status = "completed";
+          tool.result = event.result.slice(0, 3_000);
+        } else {
+          transcript.push({
+            id: `${id}-event-${++transcriptSequence}`,
+            kind: "tool",
+            name: event.name,
+            status: "completed",
+            result: event.result.slice(0, 3_000),
+            ...(event.id ? { toolCallId: event.id } : {}),
+            createdAt: Date.now(),
+          });
+        }
+        summary.transcript = transcript;
         postSubAgent({ ...summary, usage: { ...usage } });
+      } else if (event.type === "skill_activated") {
+        recordNotice(`Skill ativada: ${event.name}`);
+      } else if (event.type === "notice") {
+        recordNotice(event.message);
       } else if (event.type === "error") {
         throw new Error(event.message);
       } else if (event.type === "done") {
@@ -1338,34 +1813,188 @@ async function runSubAgent(
     const postState = subAgentPostState.get(id);
     if (postState?.timer) clearTimeout(postState.timer);
     subAgentPostState.delete(id);
+    subAgentSessions.delete(id);
     if (hasWorktree) await worktrees.cleanup(id);
   }
+}
+
+function trackSubAgentRun(id: string, run: Promise<string>): void {
+  subAgentRuns.set(id, run);
+  const clear = (): void => {
+    if (subAgentRuns.get(id) === run) subAgentRuns.delete(id);
+  };
+  // Handle background failures here so a detached task cannot create an
+  // unhandled rejection. The failed summary remains available to the parent.
+  void run.then(clear, clear);
+}
+
+function startTrackedSubAgent(
+  prompt: string,
+  options: SpawnSubAgentOptions,
+  config: ResolvedSubAgentConfig,
+): Promise<string> {
+  const run = runSubAgent(prompt, options, config);
+  trackSubAgentRun(config.id, run);
+  return run;
 }
 
 async function spawnSubAgent(
   prompt: string,
   options: SpawnSubAgentOptions,
 ): Promise<string> {
-  const config = await requestSubAgentConfig(prompt, options);
+  const config = askForSubAgentConfig.getStore()
+    ? await requestSubAgentConfig(prompt, options)
+    : resolveAutomaticSubAgentConfig(prompt, options);
   if (!config)
     throw new Error(
       `Sub-agent '${options.title}' was cancelled before launch.`,
     );
-  const run = runSubAgent(prompt, options, config);
-  subAgentRuns.set(config.id, run);
-  try {
-    const output = await run;
-    const configuration = [
-      `Sub-agent: ${options.title} (${options.role})`,
-      `Model: ${config.model}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""}`,
-      config.instructions ? `Instructions: ${config.instructions}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    return `${configuration}\n\n${output}`.trim();
-  } finally {
-    subAgentRuns.delete(config.id);
-  }
+  startTrackedSubAgent(prompt, options, config);
+  return [
+    `Sub-agent iniciado em segundo plano: ${options.title} (${options.role}).`,
+    `ID: ${config.id}`,
+    `Modelo: ${config.model}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""}`,
+    config.instructions ? `Orientações: ${config.instructions}` : "",
+    "Continue o trabalho principal em paralelo. Consulte subagent_status com action=list ou action=get para acompanhar e ler os resultados.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function subAgentForCurrentSession(id: string): SubAgentSummary | undefined {
+  if (subAgentSessionIds.get(id) !== session?.id) return undefined;
+  return latestSubAgentSummaries.get(id);
+}
+
+function serializeSubAgent(
+  summary: SubAgentSummary,
+  includeTranscript: boolean,
+): string {
+  const value = {
+    id: summary.id,
+    title: summary.title,
+    prompt: summary.prompt,
+    role: summary.role,
+    model: summary.model,
+    ...(summary.reasoningEffort
+      ? { reasoningEffort: summary.reasoningEffort }
+      : {}),
+    status: summary.status,
+    ...(summary.progress ? { progress: summary.progress } : {}),
+    ...(summary.instructions ? { instructions: summary.instructions } : {}),
+    ...(summary.output ? { output: summary.output.slice(-12_000) } : {}),
+    ...(summary.error ? { error: summary.error } : {}),
+    ...(summary.changedFiles?.length
+      ? { changedFiles: summary.changedFiles }
+      : {}),
+    ...(summary.usage ? { usage: summary.usage } : {}),
+    ...(includeTranscript && summary.transcript
+      ? {
+          transcript: summary.transcript.slice(-12).map((entry) =>
+            entry.kind === "tool"
+              ? { ...entry, result: entry.result?.slice(-1_500) }
+              : { ...entry, text: entry.text.slice(-4_000) },
+          ),
+        }
+      : {}),
+  };
+  return JSON.stringify(value, null, 2);
+}
+
+function createSubAgentStatusTool(): Tool {
+  return {
+    name: "subagent_status",
+    description:
+      "Inspect background sub-agents started with task. Use list to see current-chat agents, get to read one agent's output and recent context, or wait for a bounded time before checking again.",
+    readonly: true,
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "get", "wait"],
+          description: "list shows agents, get returns one agent, wait checks again after a bounded wait.",
+        },
+        id: {
+          type: "string",
+          description: "Sub-agent ID returned by task; required for get and wait.",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "For wait only: 1000–30000 ms. Defaults to 10000 ms.",
+        },
+      },
+      required: ["action"],
+    },
+    async execute(params) {
+      const action = params.action;
+      if (action === "list") {
+        const agents = [...latestSubAgentSummaries.values()]
+          .filter((entry) => Boolean(subAgentForCurrentSession(entry.id)))
+          .map((entry) => ({
+            id: entry.id,
+            title: entry.title,
+            role: entry.role,
+            model: entry.model,
+            status: entry.status,
+            ...(entry.progress ? { progress: entry.progress } : {}),
+            ...(entry.error ? { error: entry.error } : {}),
+          }));
+        return { success: true, output: JSON.stringify(agents, null, 2) };
+      }
+
+      if (action !== "get" && action !== "wait") {
+        return {
+          success: false,
+          output: "Action must be list, get, or wait.",
+          error: "Invalid action.",
+        };
+      }
+      const id = typeof params.id === "string" ? params.id : "";
+      if (!id) {
+        return {
+          success: false,
+          output: "An agent ID is required for get and wait.",
+          error: "Missing ID.",
+        };
+      }
+      const current = subAgentForCurrentSession(id);
+      if (!current) {
+        return {
+          success: false,
+          output: `No sub-agent '${id}' exists in the current conversation. Use action=list to inspect available IDs.`,
+          error: "Sub-agent not found in current conversation.",
+        };
+      }
+
+      if (action === "wait") {
+        const run = subAgentRuns.get(id);
+        if (run) {
+          const requested = Number(params.timeout_ms);
+          const timeoutMs = Number.isFinite(requested)
+            ? Math.max(1_000, Math.min(30_000, Math.floor(requested)))
+            : 10_000;
+          let timer: NodeJS.Timeout | undefined;
+          await Promise.race([
+            run.catch(() => undefined),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, timeoutMs);
+            }),
+          ]);
+          if (timer) clearTimeout(timer);
+        }
+      }
+
+      const latest = subAgentForCurrentSession(id);
+      return latest
+        ? { success: true, output: serializeSubAgent(latest, action === "get") }
+        : {
+            success: false,
+            output: `Sub-agent '${id}' is not available in the current conversation.`,
+            error: "Sub-agent unavailable.",
+          };
+    },
+  };
 }
 
 /** A workflow uses the same visible model picker, approval and worktree policy as task(). */
@@ -1401,18 +2030,16 @@ function workflowPrompt(request: WorkflowAgentRequest): string {
 
 async function configureWorkflowAgent(
   request: WorkflowAgentRequest,
-): Promise<ResolvedSubAgentConfig | null> {
+): Promise<ResolvedSubAgentConfig> {
   const options = workflowSubAgentOptions(request);
-  return requestSubAgentConfig(workflowPrompt(request), options);
+  return resolveAutomaticSubAgentConfig(workflowPrompt(request), options);
 }
 
 async function runWorkflowExplorer(
   request: WorkflowAgentRequest,
 ): Promise<string> {
   const config = await configureWorkflowAgent(request);
-  if (!config)
-    throw new Error(`Workflow agent '${request.name}' was cancelled.`);
-  return runSubAgent(
+  return startTrackedSubAgent(
     workflowPrompt(request),
     workflowSubAgentOptions(request),
     config,
@@ -1423,7 +2050,6 @@ async function confirmWorkflowWorker(
   request: WorkflowAgentRequest,
 ): Promise<boolean> {
   const config = await configureWorkflowAgent(request);
-  if (!config) return false;
   workflowConfigs.set(request, config);
   return true;
 }
@@ -1437,17 +2063,12 @@ async function runWorkflowWorker(
     throw new Error(
       `Workflow worker '${request.name}' has no approved configuration.`,
     );
-  const run = runSubAgent(
+  const run = startTrackedSubAgent(
     workflowPrompt(request),
     workflowSubAgentOptions(request),
     config,
   );
-  subAgentRuns.set(config.id, run);
-  try {
-    return await run;
-  } finally {
-    subAgentRuns.delete(config.id);
-  }
+  return await run;
 }
 
 function reportWorkflowEvent(event: WorkflowEvent): void {
@@ -1456,6 +2077,10 @@ function reportWorkflowEvent(event: WorkflowEvent): void {
 
 /** Builds the agent for the current model. Called on start, model change and reset. */
 async function buildAgent(): Promise<void> {
+  // A previous provider measurement may belong to another model or session.
+  // The next engine snapshot will provide a fresh estimate for the new agent.
+  latestContextTokens = undefined;
+  latestContextSource = "engine";
   provider = resolveProviderFor(model);
 
   const client = createClient(model, apiKey, {
@@ -1472,14 +2097,19 @@ async function buildAgent(): Promise<void> {
   const runner = createSandboxRunner(config.sandbox ?? "auto", process.cwd());
   const baseInstruction = await loadSystemInstruction();
   const catalogInstructions = modelCatalog.length
-    ? `Available sub-agent models (choose exact ids; the user can edit each recommendation):\n${modelCatalog
+    ? `Available sub-agent models (choose exact ids; use a supported reasoning effort):\n${modelCatalog
         .map(
           (entry) =>
             `- ${entry.id}${entry.reasoningEfforts?.length ? ` (effort: ${entry.reasoningEfforts.join(", ")})` : ""}`,
         )
         .join("\n")}`
-    : "The model catalog is unavailable; do not invent a sub-agent model id. Ask the user or use the current model if it becomes available.";
-  const systemInstruction = `${baseInstruction}\n\n## Visible progress updates\n\nFor complex tasks that use tools or take multiple steps, use the report_progress tool at meaningful milestones. Send one concise, user-facing sentence describing the current step or its high-level reason. This message appears in the chat's progress panel. It is a public summary, never private scratchpad reasoning or detailed internal deliberation. Do not use it for simple questions or repeat the same update.\n\n## Sub-agent orchestration\n\nDelegate independent work with the task tool when it helps. Propose a concise title, role (explorer for read-only research, worker for isolated implementation), exact catalog model, supported reasoning effort, and focused instructions describing boundaries and output. For each proposed sub-agent, the user chooses whether to start with your configuration or edit it first. Workers run in a Git worktree and their diff is never applied until the user approves it.\n\n${catalogInstructions}`;
+    : "The model catalog is unavailable; do not invent a model id. The task tool will use the currently selected model.";
+  const systemInstruction = `${baseInstruction}\n\n## Visible progress updates\n\nFor complex tasks that use tools or take multiple steps, use the report_progress tool at meaningful milestones. Send one concise, user-facing sentence describing the current step or its high-level reason. This message appears in the chat's progress panel. It is a public summary, never private scratchpad reasoning or detailed internal deliberation. Do not use it for simple questions or repeat the same update.\n\n## Sub-agent orchestration\n\nDelegate useful independent work with the task tool without asking the user first. Choose a concise title, role (explorer for read-only research, worker for isolated implementation), exact catalog model, supported reasoning effort, and focused instructions. By default, launch with your proposed configuration immediately and do not open a configuration question. Set ask_for_configuration=true only when the user explicitly asks to configure, choose, review, or edit the sub-agent before it starts (for example: “peça para eu configurar o sub-agent”). If the user asks you to use sub-agents, that alone is authorization to launch them autonomously. Workflow agents also start with the recommended configuration.\n\nThe task tool starts a child in the background and immediately returns its ID; it does not wait for the child to finish. Launch independent tasks early, one after another without waiting between launches (up to the concurrency limit), then continue your own work. Consult subagent_status with action=list/get while working, and use its bounded wait action only when you need a particular result. Do not serialize independent tasks by waiting for each one before starting the next. Before your final answer, check the relevant children and use their completed findings. Workers still run in isolated Git worktrees; their diffs require the user's approval before application, and all normal tool permission prompts still apply. If the user asks to configure an agent manually, prefer the task tool with ask_for_configuration=true.\n\n${catalogInstructions}`;
+  const mcpGuidance = [
+    "## MCP server management",
+    "Use manage_mcp_servers with action=list to inspect configured servers and available tools. Use action=add only when the user asks to add a server; provide its exact name and transport configuration. The app asks the user to approve every add or remove. A new server is probed before its configuration is saved and its tools are offered on the next model call. Use ${NAME} references for credentials instead of putting secret values in chat.",
+  ].join("\n");
+  const fullSystemInstruction = `${systemInstruction}\n\n${mcpGuidance}`;
   const tools = createDefaultRegistry(model, runner, {
     spawnSubAgent,
     askUser: (question) => requestUserQuestion("main", "Ruby", question),
@@ -1491,6 +2121,32 @@ async function buildAgent(): Promise<void> {
       onEvent: reportWorkflowEvent,
     },
   });
+  const taskTool = tools.get("task");
+  if (taskTool) {
+    taskTool.description =
+      "Launch an independent sub-agent autonomously using the selected catalog model and reasoning effort. " +
+      "Set ask_for_configuration=true only if the user explicitly wants to review or edit the agent configuration before launch. " +
+      "Workers run in an isolated Git worktree and their diff always requires the user's approval before it is applied.";
+    taskTool.parameters.properties = {
+      ...(taskTool.parameters.properties ?? {}),
+      ask_for_configuration: {
+        type: "boolean",
+        description:
+          "Optional. Set true only when the user explicitly asks to configure or review this sub-agent before it starts. Default false launches autonomously.",
+      },
+    };
+    const executeTask = taskTool.execute.bind(taskTool);
+    taskTool.execute = (params, context) => {
+      const ask = params.ask_for_configuration === true;
+      const taskParams = { ...params };
+      delete taskParams.ask_for_configuration;
+      return askForSubAgentConfig.run(ask, () =>
+        executeTask(taskParams, context),
+      );
+    };
+  }
+  tools.register(createSubAgentStatusTool());
+  tools.register(createMcpManagementTool(tools));
   const skills = new SkillRegistry();
   await skills.discover(process.cwd());
   skillRegistry = skills;
@@ -1498,14 +2154,12 @@ async function buildAgent(): Promise<void> {
   // MCP tools join the same registry as the built-ins, which is what makes an MCP
   // server indistinguishable from a native tool from the agent's point of view.
   // A failing server is reported and skipped; it never blocks the agent.
-  await connectMcp();
-  await mcp?.registerTools(tools).catch((err: unknown) => {
+  await connectMcp(tools).catch((err: unknown) => {
     post({
       type: "error",
       message: `MCP tools unavailable: ${err instanceof Error ? err.message : String(err)}`,
     });
   });
-  postMcpStatus();
 
   // Browser tools are always registered: they fail with a clear message if the
   // panel is closed, which is better than the model not knowing browsing exists.
@@ -1546,7 +2200,7 @@ async function buildAgent(): Promise<void> {
     client,
     tools,
     skills,
-    systemInstruction,
+    fullSystemInstruction,
     undefined,
     readConfiguredMaxIterations(),
     // `model` is required here: the Agent derives its context window from the
@@ -1695,9 +2349,10 @@ function reportUsage(): void {
   const stats = agent.getContextStats();
   post({
     type: "usage",
-    inputTokens: stats.estimatedTokens,
+    inputTokens: latestContextTokens ?? stats.estimatedTokens,
     outputTokens: sessionOutputTokens,
     contextWindow: stats.contextWindow,
+    contextSource: latestContextTokens === undefined ? "engine" : latestContextSource,
   });
 }
 
@@ -1748,6 +2403,7 @@ async function resumeSession(sessionId: string): Promise<void> {
   sessionMessages = loaded.messages;
   sessionOutputTokens = 0;
   persistedSubAgentStatuses.clear();
+  restoreSubAgentSummaries(session.id, loaded.entries);
   await buildAgent();
   await reportSessions(loaded.entries);
   reportUsage();
@@ -1760,6 +2416,7 @@ async function restoreLatestSession(): Promise<SessionEntry[]> {
     const loaded = await Session.loadMessages("latest", process.cwd());
     session = loaded.session;
     sessionMessages = loaded.messages;
+    restoreSubAgentSummaries(session.id, loaded.entries);
     return loaded.entries;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2202,6 +2859,25 @@ async function handle(request: EngineRequest): Promise<void> {
 
     case "subAgentConfigResponse": {
       handleSubAgentConfigResponse(request);
+      return;
+    }
+
+    case "clearSubAgents": {
+      const ids = Array.isArray(request.ids)
+        ? [...new Set(
+            request.ids
+              .filter((id): id is string => typeof id === "string" && id.length > 0)
+              .map((id) => id.slice(0, 200)),
+          )].slice(0, 500)
+        : [];
+      if (ids.length > 0) {
+        await logSessionUiEvent({
+          version: 1,
+          kind: "subagent",
+          id: `clear-${randomUUID()}`,
+          data: { clearedIds: ids },
+        });
+      }
       return;
     }
 

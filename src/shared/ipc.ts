@@ -97,6 +97,20 @@ export interface SubAgentConfigRequest {
   proposalNote?: string;
 }
 
+/** Publicly observable child-agent activity; provider-private reasoning is never included. */
+export type SubAgentTranscriptEntry =
+  | { id: string; kind: "assistant"; text: string; createdAt: number }
+  | {
+      id: string;
+      kind: "tool";
+      name: string;
+      status: "running" | "completed";
+      result?: string;
+      toolCallId?: string;
+      createdAt: number;
+    }
+  | { id: string; kind: "notice"; text: string; createdAt: number };
+
 export interface SubAgentSummary {
   id: string;
   title: string;
@@ -108,6 +122,7 @@ export interface SubAgentSummary {
   status: SubAgentStatus;
   progress?: string;
   output?: string;
+  transcript?: SubAgentTranscriptEntry[];
   diff?: string;
   changedFiles?: string[];
   error?: string;
@@ -286,6 +301,56 @@ export interface AgentSettings {
   maxIterations: number;
 }
 
+export interface GitFileChange {
+  path: string;
+  /** Git index status character, or `?` for an untracked file. */
+  indexStatus: string;
+  /** Git working-tree status character. */
+  worktreeStatus: string;
+  status: string;
+}
+
+export interface GitStatus {
+  available: boolean;
+  isRepository: boolean;
+  root?: string;
+  branch?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  files: GitFileChange[];
+}
+
+export interface GitWorktreeSummary {
+  path: string;
+  head: string;
+  branch?: string;
+  detached: boolean;
+  main: boolean;
+  dirty: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
+export type GitOperationRequest =
+  | { action: "status" }
+  | { action: "diff"; path: string }
+  | { action: "stage"; path: string; staged: boolean }
+  | { action: "commit"; message: string }
+  | { action: "worktrees" }
+  | { action: "createWorktree"; branch: string }
+  | { action: "removeWorktree"; path: string };
+
+export interface GitOperationResponse {
+  ok: boolean;
+  error?: string;
+  status?: GitStatus;
+  diff?: string;
+  worktrees?: GitWorktreeSummary[];
+  createdPath?: string;
+  cancelled?: boolean;
+}
+
 // --- Metrics (the output panel) ---------------------------------------------
 
 /**
@@ -349,6 +414,7 @@ export type EngineRequest =
       reasoningEffort?: ReasoningEffort;
       instructions?: string;
     }
+  | { type: "clearSubAgents"; ids: string[] }
   | {
       type: "subAgentReviewResponse";
       id: string;
@@ -426,6 +492,8 @@ export type EngineResponse =
       inputTokens: number;
       outputTokens: number;
       contextWindow: number;
+      /** `provider` is usage returned by the last LLM call; `engine` is a pre-call estimate. */
+      contextSource: "engine" | "provider";
     }
   | { type: "approvalRequest"; request: ApprovalRequest }
   /** Sent after a response lands, so the modal can clear and the list can update. */
@@ -491,6 +559,8 @@ export interface RubyDesktopApi {
   pickWorkspace(): Promise<string | undefined>;
   /** Read the most recently opened workspaces. */
   getRecentWorkspaces(): Promise<RecentWorkspaceSummary[]>;
+  /** Run one validated Git action for the current workspace. */
+  gitOperation(request: GitOperationRequest): Promise<GitOperationResponse>;
   /** Switch workspace. The engine restarts with the new directory as its cwd. */
   setWorkspace(path: string): void;
   /** Encrypt and store the Ruby API key through the operating system keychain. */
@@ -531,6 +601,8 @@ export interface RubyDesktopApi {
       instructions: string;
     },
   ): void;
+  /** Hide finished sub-agents from the panel and persist that choice in the session. */
+  clearSubAgents(ids: string[]): void;
   /** Approve applying a worker's diff or discard the isolated worktree. */
   respondSubAgentReview(
     id: string,

@@ -7,6 +7,7 @@ import {
   X,
   Check,
   AlertTriangle,
+  ChevronDown,
 } from "lucide-react";
 import { useStore } from "../store";
 import { cn } from "../lib/utils";
@@ -33,11 +34,14 @@ export function McpPanel({
   const testServer = useStore((s) => s.testMcpServer);
   const clearTest = useStore((s) => s.clearMcpTest);
   const [adding, setAdding] = useState(false);
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   return (
     <div
       data-testid="mcp-panel"
-      className="flex w-96 min-w-0 shrink-0 flex-col border-l border-sidebar-border bg-sidebar max-[1000px]:w-[min(20rem,48vw)]"
+      className="flex min-h-0 flex-1 flex-col bg-sidebar"
     >
       <header className="flex items-center gap-2 border-b border-sidebar-border px-4 py-3">
         <Plug className="h-3.5 w-3.5 text-chart-1" />
@@ -83,56 +87,84 @@ export function McpPanel({
         ) : null}
 
         <div className="space-y-2">
-          {servers.map((server) => (
-            <div
-              key={server.name}
-              data-testid={`mcp-server-${server.name}`}
-              className="rounded-lg border border-line bg-card px-3 py-2"
-            >
-              <div className="flex items-center gap-2">
-                {server.connected ? (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-chart-5" />
-                ) : (
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-chart-3" />
-                )}
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
-                  {server.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => remove(server.name)}
-                  title="Remover servidor"
-                  className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-destructive"
+          {servers.map((server) => {
+            const expanded = expandedServers.has(server.name);
+            const toolsId = `mcp-tools-${encodeURIComponent(server.name)}`;
+            return (
+              <div
+                key={server.name}
+                data-testid={`mcp-server-${server.name}`}
+                className="rounded-lg border border-line bg-card px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  {server.connected ? (
+                    <Check className="h-3.5 w-3.5 shrink-0 text-chart-5" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-chart-3" />
+                  )}
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    aria-controls={toolsId}
+                    onClick={() => setExpandedServers((current) => {
+                      const next = new Set(current);
+                      if (next.has(server.name)) next.delete(server.name);
+                      else next.add(server.name);
+                      return next;
+                    })}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+                      {server.name}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {server.tools.length} {server.tools.length === 1 ? "ferramenta" : "ferramentas"}
+                    </span>
+                    <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remove(server.name)}
+                    title="Remover servidor"
+                    aria-label={`Remover servidor ${server.name}`}
+                    className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-destructive"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+
+                {server.error ? (
+                  <p className="mt-1 text-[11px] break-words text-chart-3">
+                    {server.error}
+                  </p>
+                ) : null}
+
+                <div
+                  id={toolsId}
+                  hidden={!expanded}
+                  className="mt-2 border-t border-line pt-2"
                 >
-                  <Trash2 className="h-3 w-3" />
-                </button>
+                  {server.tools.length > 0 ? (
+                    <ul className="max-h-48 space-y-0.5 overflow-y-auto">
+                      {server.tools.map((tool) => (
+                        <li
+                          key={tool.name}
+                          className="truncate font-mono text-[10px] text-muted-foreground"
+                          title={tool.description}
+                        >
+                          mcp__{server.toolPrefix}__{tool.name}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : server.connected && !server.error ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      conectado, sem ferramentas
+                    </p>
+                  ) : null}
+                </div>
               </div>
-
-              {server.error ? (
-                <p className="mt-1 text-[11px] break-words text-chart-3">
-                  {server.error}
-                </p>
-              ) : null}
-
-              {server.tools.length > 0 ? (
-                <ul className="mt-1.5 space-y-0.5">
-                  {server.tools.map((tool) => (
-                    <li
-                      key={tool.name}
-                      className="truncate font-mono text-[10px] text-muted-foreground"
-                      title={tool.description}
-                    >
-                      mcp__{server.toolPrefix}__{tool.name}
-                    </li>
-                  ))}
-                </ul>
-              ) : server.connected && !server.error ? (
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  conectado, sem ferramentas
-                </p>
-              ) : null}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

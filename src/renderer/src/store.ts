@@ -179,6 +179,8 @@ interface State {
   stepCount: number;
   sessions: SessionSummary[];
   currentSessionId?: string;
+  /** Completed sub-agent rows the user has hidden from this conversation's panel. */
+  clearedSubAgentIds: string[];
   busy: boolean;
   /** An asynchronous slash command is running outside a model turn. */
   queueCommandPending: boolean;
@@ -186,6 +188,7 @@ interface State {
   fatal?: string;
   contextWindow: number;
   contextUsed: number;
+  contextSource: "engine" | "provider";
   /** Set while the engine is compacting, so the UI can show progress. */
   compacting: boolean;
   /** The tool call the engine is blocked on, if any. */
@@ -245,6 +248,7 @@ interface State {
     id: string,
     action: "merge" | "discard" | "cancel",
   ) => void;
+  clearCompletedSubAgents: (ids: string[]) => void;
   compact: () => void;
   newSession: () => void;
   resumeSession: (sessionId: string) => void;
@@ -787,6 +791,24 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
   );
 }
 
+function restoredClearedSubAgentIds(entries: SessionEntry[]): string[] {
+  const cleared = new Set<string>();
+  for (const entry of entries) {
+    if (
+      entry.type !== "ui_event" ||
+      entry.event.version !== 1 ||
+      entry.event.kind !== "subagent" ||
+      !isRecord(entry.event.data) ||
+      !Array.isArray(entry.event.data.clearedIds)
+    )
+      continue;
+    for (const id of entry.event.data.clearedIds) {
+      if (typeof id === "string" && id.length > 0) cleared.add(id);
+    }
+  }
+  return [...cleared];
+}
+
 /** Human label for a permission mode, used in the status bar and notices. */
 export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
   normal: "Perguntar",
@@ -1031,10 +1053,12 @@ export const useStore = create<State>((set, get) => ({
   turnCount: 0,
   stepCount: 0,
   sessions: [],
+  clearedSubAgentIds: [],
   busy: false,
   queueCommandPending: false,
   contextWindow: 0,
   contextUsed: 0,
+  contextSource: "engine",
   compacting: false,
   permissionMode: "normal",
   grants: { project: [], global: [] },
@@ -1078,7 +1102,9 @@ export const useStore = create<State>((set, get) => ({
                 stepCount: 0,
                 sessions: [],
                 currentSessionId: undefined,
+                clearedSubAgentIds: [],
                 contextUsed: 0,
+                contextSource: "engine",
                 metrics: [],
                 sessionUsage: emptySessionUsageStats(),
                 goal: undefined,
@@ -1122,6 +1148,9 @@ export const useStore = create<State>((set, get) => ({
         const transcriptItems = message.transcript !== undefined
           ? restoreTranscript(message.transcript)
           : undefined;
+        const clearedSubAgentIds = message.transcript !== undefined
+          ? restoredClearedSubAgentIds(message.transcript)
+          : undefined;
         set({
           sessions: message.sessions,
           currentSessionId: message.currentSessionId,
@@ -1129,8 +1158,10 @@ export const useStore = create<State>((set, get) => ({
           ...(transcriptItems !== undefined
             ? {
                 items: transcriptItems,
+                clearedSubAgentIds,
                 ...countChatItems(transcriptItems),
                 contextUsed: 0,
+                contextSource: "engine",
                 metrics: [],
                 sessionUsage: emptySessionUsageStats(),
               }
@@ -1170,6 +1201,7 @@ export const useStore = create<State>((set, get) => ({
         set({
           contextUsed: message.inputTokens,
           contextWindow: message.contextWindow,
+          contextSource: message.contextSource,
         });
         return;
 
@@ -1610,6 +1642,15 @@ export const useStore = create<State>((set, get) => ({
   respondSubAgentReview: (id, action) =>
     window.ruby.respondSubAgentReview(id, action),
 
+  clearCompletedSubAgents: (ids) => {
+    const unique = [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))];
+    if (unique.length === 0) return;
+    set((state) => ({
+      clearedSubAgentIds: [...new Set([...state.clearedSubAgentIds, ...unique])],
+    }));
+    window.ruby.clearSubAgents(unique);
+  },
+
   compact: () => {
     set({ compacting: true, queueCommandPending: true });
     window.ruby.compact();
@@ -1655,11 +1696,13 @@ export const useStore = create<State>((set, get) => ({
   reset: () => {
     set({
       items: [],
+      clearedSubAgentIds: [],
       queuedMessages: [],
       queueCommandPending: true,
       turnCount: 0,
       stepCount: 0,
       contextUsed: 0,
+      contextSource: "engine",
       metrics: [],
       sessionUsage: emptySessionUsageStats(),
       approval: undefined,

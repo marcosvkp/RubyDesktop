@@ -16,13 +16,14 @@ import {
   utilityProcess,
 } from "electron";
 import { autoUpdater } from "electron-updater";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { BrowserController } from "./browser.js";
 import { createBrowserService } from "./browser-service.js";
+import { runGitOperation } from "./git-service.js";
 import { startAutoUpdates } from "./update-manager.js";
 import type {
   ApprovalDecision,
@@ -761,6 +762,20 @@ function createWindow(): void {
 
 ipcMain.handle(IPC.invoke.getWorkspace, () => workspace);
 ipcMain.handle(IPC.invoke.getRecentWorkspaces, () => recentWorkspaces);
+ipcMain.handle(IPC.invoke.gitOperation, async (_event, request: unknown) =>
+  runGitOperation(workspace, request, {
+    chooseWorktreeParent: async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return undefined;
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: "Escolha onde criar o worktree",
+        defaultPath: dirname(resolve(workspace)),
+        buttonLabel: "Criar worktree aqui",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    },
+  }),
+);
 ipcMain.handle(IPC.invoke.getAgentSettings, () => ({ ...agentSettings }));
 
 ipcMain.handle(IPC.invoke.pickWorkspace, async () => {
@@ -942,6 +957,15 @@ ipcMain.on(
   (_event, id: string, action: "merge" | "discard" | "cancel") =>
     post({ type: "subAgentReviewResponse", id, action }),
 );
+ipcMain.on(IPC.send.clearSubAgents, (_event, value: unknown) => {
+  const ids = Array.isArray(value)
+    ? value
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+        .map((id) => id.slice(0, 200))
+        .slice(0, 500)
+    : [];
+  if (ids.length > 0) post({ type: "clearSubAgents", ids });
+});
 ipcMain.on(IPC.send.compact, () => post({ type: "compact" }));
 ipcMain.on(IPC.send.newSession, () => post({ type: "session", action: "new" }));
 ipcMain.on(IPC.send.resumeSession, (_event, sessionId: string) =>

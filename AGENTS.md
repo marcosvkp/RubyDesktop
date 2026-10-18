@@ -134,6 +134,7 @@ src/
     index.ts             # window lifecycle, IPC wiring, engine spawn/kill
     browser.ts           # WebContentsView + CDP driver
     browser-service.ts   # browser RPC handling (separate entry, so tests share it)
+    git-service.ts       # scoped local Git/worktree operations for the workspace panel
   preload/index.ts       # the only bridge; enumerates `window.ruby`
   engine-host/
     index.ts             # agent construction, approvals, goals, MCP, metrics

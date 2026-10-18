@@ -69,7 +69,7 @@ export function BrowserPanel({
   return (
     <div
       data-testid="browser-panel"
-      className="flex w-[46%] min-w-[280px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar max-[1000px]:w-[40%] max-[1000px]:min-w-[250px]"
+      className="flex min-h-0 flex-1 flex-col bg-sidebar"
     >
       <div
         role="tablist"

@@ -10,6 +10,9 @@ import {
   ShieldCheck,
   Plug,
   Globe,
+  GitBranch,
+  Waypoints,
+  Bot,
   Plus,
   MessageSquare,
 } from "lucide-react";
@@ -28,12 +31,24 @@ export function Sidebar({
   mcpOpen,
   onToggleBrowser,
   browserOpen,
+  onToggleGit,
+  gitOpen,
+  onToggleWorktrees,
+  worktreesOpen,
+  onToggleSubAgents,
+  subAgentsOpen,
 }: {
   workspace: string;
   onToggleMcp: () => void;
   mcpOpen: boolean;
   onToggleBrowser: () => void;
   browserOpen: boolean;
+  onToggleGit: () => void;
+  gitOpen: boolean;
+  onToggleWorktrees: () => void;
+  worktreesOpen: boolean;
+  onToggleSubAgents: () => void;
+  subAgentsOpen: boolean;
 }): React.JSX.Element {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
@@ -48,6 +63,8 @@ export function Sidebar({
   const switchWorkspace = useStore((s) => s.switchWorkspace);
   const grants = useStore((s) => s.grants);
   const mcpServers = useStore((s) => s.mcpServers);
+  const items = useStore((s) => s.items);
+  const subAgentCount = items.filter((item) => item.kind === "subagent").length;
 
   useEffect(() => {
     if (!workspaceMenuOpen) return;
@@ -277,6 +294,62 @@ export function Sidebar({
           <span className="flex-1" />
           <span className="font-mono max-[1000px]:hidden">
             {browserOpen ? "aberto" : "fechado"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleGit}
+          className={cn(
+            "mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] transition-colors",
+            gitOpen
+              ? "bg-sidebar-accent text-foreground"
+              : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+          )}
+          aria-label="Git do workspace"
+          title="Git do workspace"
+        >
+          <GitBranch className="h-3.5 w-3.5 text-chart-4" />
+          <span className="max-[1000px]:hidden">Git</span>
+          <span className="flex-1" />
+          <span className="font-mono max-[1000px]:hidden">{gitOpen ? "aberto" : ""}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleWorktrees}
+          className={cn(
+            "mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] transition-colors",
+            worktreesOpen
+              ? "bg-sidebar-accent text-foreground"
+              : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+          )}
+          aria-label="Worktrees Git"
+          title="Worktrees Git"
+        >
+          <Waypoints className="h-3.5 w-3.5 text-chart-2" />
+          <span className="max-[1000px]:hidden">Worktrees</span>
+          <span className="flex-1" />
+          <span className="font-mono max-[1000px]:hidden">{worktreesOpen ? "aberto" : ""}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleSubAgents}
+          className={cn(
+            "mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] transition-colors",
+            subAgentsOpen
+              ? "bg-sidebar-accent text-foreground"
+              : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+          )}
+          aria-label="Subagentes desta conversa"
+          title="Subagentes desta conversa"
+        >
+          <Bot className="h-3.5 w-3.5 text-chart-5" />
+          <span className="max-[1000px]:hidden">Subagentes</span>
+          <span className="flex-1" />
+          <span className="font-mono max-[1000px]:hidden">
+            {subAgentCount || (subAgentsOpen ? "aberto" : "")}
           </span>
         </button>
       </div>

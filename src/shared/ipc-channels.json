@@ -2,6 +2,7 @@
   "invoke": {
     "getWorkspace": "ruby:get-workspace",
     "getRecentWorkspaces": "ruby:get-recent-workspaces",
+    "gitOperation": "ruby:git-operation",
     "pickWorkspace": "ruby:pick-workspace",
     "saveApiKey": "ruby:save-api-key",
     "getAgentSettings": "ruby:get-agent-settings",
@@ -17,6 +18,7 @@
     "approvalResponse": "ruby:approval-response",
     "userQuestionResponse": "ruby:user-question-response",
     "subAgentConfigResponse": "ruby:sub-agent-config-response",
+    "clearSubAgents": "ruby:clear-subagents",
     "subAgentReviewResponse": "ruby:sub-agent-review-response",
     "compact": "ruby:compact",
     "newSession": "ruby:new-session",

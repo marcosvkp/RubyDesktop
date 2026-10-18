@@ -16,6 +16,9 @@ const api: RubyDesktopApi = {
 
   getRecentWorkspaces: () => ipcRenderer.invoke(IPC.invoke.getRecentWorkspaces),
 
+  gitOperation: (request) =>
+    ipcRenderer.invoke(IPC.invoke.gitOperation, request),
+
   pickWorkspace: () => ipcRenderer.invoke(IPC.invoke.pickWorkspace),
 
   setWorkspace: (path) => ipcRenderer.send(IPC.send.setWorkspace, path),
@@ -48,6 +51,8 @@ const api: RubyDesktopApi = {
 
   respondSubAgentConfig: (id, action, config) =>
     ipcRenderer.send(IPC.send.subAgentConfigResponse, id, action, config),
+
+  clearSubAgents: (ids) => ipcRenderer.send(IPC.send.clearSubAgents, ids),
 
   respondSubAgentReview: (id, action) =>
     ipcRenderer.send(IPC.send.subAgentReviewResponse, id, action),

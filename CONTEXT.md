@@ -6,7 +6,9 @@
 > Para o _porquê_ das decisões e o histórico completo, ver [`PLANO.md`](PLANO.md).
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
-**Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e o M8 (Skills de modding Minecraft) estão implementados.
+**Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e M8 (Skills de modding Minecraft) estão implementados.
+O candidato `v0.1.7` reúne o painel local de Git/worktrees, melhorias no painel MCP e execução
+paralela consultável dos subagentes. Ainda aguarda publicação pela release multiplataforma.
 A hardening pass de `FIX.md` também foi implementada no Desktop. A release atual `v0.1.6` fixa o
 RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutidas e foi publicada
 em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
@@ -109,8 +111,9 @@ workflow compila a engine do repositório próprio no GitHub, sem depender da pu
   popovers explicativos. Também exibem tempo LLM/tool, TTFT e velocidade de geração quando há dados.
 - `cachedTokens` já exposto pelo engine agora atravessa o contrato IPC e entra nos totais.
 - Os totais de token/cache começam na execução atual. Sessões restauradas preservam conversa e
-  turnos/etapas, mas métricas antigas não são persistidas. A janela usa a estimativa de mensagens
-  disponível no engine; system prompt e ferramentas não são separados.
+  turnos/etapas, mas métricas antigas não são persistidas. O contexto usa a estimativa preparada
+  pelo engine antes da chamada e troca para os tokens de entrada reportados pelo provider quando
+  a resposta termina; a compactação continua usando a estimativa interna do engine.
 - `smoke-markdown.cjs` verifica os quatro popovers e o seletor de modelo; build e smoke suite
   completos passaram.
 
@@ -130,9 +133,14 @@ workflow compila a engine do repositório próprio no GitHub, sem depender da pu
 
 ### M4.1–M4.4 — Subagentes, perguntas, revisão e workflows ✅
 
-- `task` aceita papel, modelo do catálogo, reasoning effort, título e instruções por agente. Antes
-  de cada lançamento, o usuário pode iniciar com a configuração proposta pela IA ou abrir o formulário
-  para editar modelo, effort e instruções. Alternativas ficam identificadas antes de iniciar.
+- `task` aceita papel, modelo do catálogo, reasoning effort, título e instruções por agente. O padrão
+  é iniciar autonomamente com a configuração proposta; `ask_for_configuration=true` abre o formulário
+  apenas quando o usuário pedir para configurar/revisar o agente. Workflows também iniciam usando a
+  recomendação. Chamadas `task` iniciam em segundo plano e retornam um ID sem esperar a conclusão; o
+  agente principal pode iniciar tarefas independentes em paralelo, continuar seu próprio trabalho e
+  consultar `subagent_status` (`list`, `get` ou `wait`) para acompanhar e ler os resultados. A consulta
+  é limitada à conversa atual e os resumos são recuperados do histórico salvo. O diff de workers
+  continua exigindo aprovação antes de aplicar.
 - `ask_user` emite perguntas estruturadas com opções e resposta livre. O cartão identifica o agente;
   resposta, cancelamento, abort, reset e shutdown resolvem as esperas.
 - Explorers ficam read-only. Workers recebem worktrees Git próprios, criados de um snapshot que
@@ -144,6 +152,8 @@ workflow compila a engine do repositório próprio no GitHub, sem depender da pu
   cartões de configuração/sub-agent e perguntas. Ao reabrir, as opções Sim/Não reaparecem com a
   escolha marcada; itens que ficaram pendentes viram interrompidos. Sessões antigas recuperam esses
   cartões a partir dos argumentos e resultados de `task`/`ask_user` quando há dados suficientes.
+- A aba Subagentes permite ocultar todos os finalizados de uma vez. A escolha persiste na sessão e
+  mantém os cartões do chat intactos; agentes ativos e aguardando revisão permanecem na lista.
 - Ferramentas de arquivo são limitadas à raiz do worker e mantêm o predicado original de aprovação;
   cada operação no worktree pode pedir confirmação. Toda chamada de shell do worker também exige
   aprovação, pois um comando pode referenciar caminhos absolutos fora do diretório atual.
@@ -166,8 +176,8 @@ workflow compila a engine do repositório próprio no GitHub, sem depender da pu
 - Catálogo de modelos e reasoning efforts compatíveis alimentam a configuração inline; modelos ou
   efforts indisponíveis geram uma alternativa identificada, sem troca silenciosa.
 - O usuário pode pedir papéis, modelos, efforts e orientações em linguagem natural. O orquestrador
-  propõe a divisão e, para cada agente, o usuário escolhe iniciar com a recomendação ou revisar e
-  editar os parâmetros.
+  propõe a divisão e inicia com a recomendação; quando o usuário pedir configuração manual, abre o
+  formulário para editar os parâmetros antes do início.
 - Cada subagente recebe instruções próprias de papel, contexto, limites, ferramentas e formato de
   saída, formando um harness por agente.
 - `ask_user` mostra perguntas estruturadas inline, com opções e resposta livre. O cartão identifica
@@ -188,6 +198,11 @@ workflow compila a engine do repositório próprio no GitHub, sem depender da pu
 
 - Cartões no chat mostram progresso, status, modelo, effort, papel, instruções e tokens/tools por
   agente. Perguntas/respostas aparecem no mesmo chat.
+- A aba **Subagentes** no painel lateral lista os agentes desta conversa por estado e abre o prompt,
+  orientações, modelo, effort, uso e a atividade observável do agente. Checkpoints da conversa são
+  salvos na sessão; raciocínio privado do provedor e argumentos de ferramentas não são exibidos.
+- A lista permite limpar os subagentes finalizados sem apagar seus cartões do chat; essa escolha
+  também é salva na sessão.
 - O diff do worktree aparece antes da ação **Aplicar diff**. Conflitos mantêm a revisão aberta e não
   alteram os arquivos; o usuário pode tentar de novo ou descartar.
 
@@ -234,6 +249,21 @@ assiná-los e publicar os feeds correspondentes, configure `WIN_CSC_LINK` + `WIN
 (ou `WIN_CSC_NAME`) e, no macOS, `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
 `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID`. Configure `RUBY_API_KEY` para os smokes que chamam
 o provider. Builds locais sem publicação também continuam possíveis sem certificados.
+
+### M6.1 — Git e worktrees no painel direito ✅
+
+- Navegador, Git, Worktrees e MCP compartilham a mesma área direita com abas; a troca não desmonta o
+  chat. Quando o agente abre o navegador, a aba do navegador é trazida à frente.
+- Git mostra branch, upstream/ahead/behind, arquivos alterados e diff; permite stage/unstage por
+  arquivo e criar commit a partir dos arquivos staged. O commit exige mensagem explícita.
+- Worktrees podem ser listados, criados a partir de uma branch nova, abertos como workspace e
+  removidos quando limpos. Um worktree com alterações, bloqueado, principal ou atualmente aberto
+  não é removido.
+- Git é chamado pelo processo principal sem shell. O renderer tem apenas uma operação IPC tipada;
+  operações de arquivo só aceitam paths que aparecem no status atual. Git precisa estar instalado.
+- O painel ainda não faz fetch/pull/push, troca direta de branch, merge ou resolução de conflitos.
+- Verificação local desta implementação: `npm run typecheck` e `npm run build` passaram. Os smoke
+  scripts não foram executados nesta rodada.
 
 ### M7 planejado — Anexos e geração de imagens (não implementado)
 
@@ -345,6 +375,13 @@ Só os smoke tests em Electron. Sem vitest, sem cobertura, sem teste unitário d
 
 O `coverage.exclude` agora aponta para `src/providers/types.ts` e `src/core/agent.ts`, que são os
 caminhos existentes; os excludes de ferramentas e CLI permanecem alinhados com a cobertura desejada.
+
+### ✅ 2.14 Painel local de Git/worktrees
+
+O painel direito tem abas compartilhadas para Navegador, Git, Worktrees e MCP. Git exibe status e
+diff, permite stage/unstage e commit explícito. O painel de worktrees lista a branch, HEAD, status
+sujo/limpo e permite criar, abrir ou remover worktrees limpos. Push/pull/fetch, checkout de branch,
+merge e resolução de conflitos permanecem fora do escopo desta entrega.
 
 ---
 

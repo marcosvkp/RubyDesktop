@@ -292,6 +292,10 @@ function runScenario({
       path: workspace,
       label: path.basename(workspace),
     }]);
+    registerInvoke(IPC.invoke.gitOperation, async () => ({
+      ok: false,
+      error: "Unavailable in smoke harness.",
+    }));
     registerInvoke(IPC.invoke.pickWorkspace, () => undefined);
     registerInvoke(IPC.invoke.saveApiKey, async () => ({
       ok: false,
@@ -349,6 +353,9 @@ function runScenario({
     );
     registerSend(IPC.send.subAgentReviewResponse, (_e, id, action) =>
       engine?.postMessage({ type: "subAgentReviewResponse", id, action }),
+    );
+    registerSend(IPC.send.clearSubAgents, (_e, ids) =>
+      engine?.postMessage({ type: "clearSubAgents", ids }),
     );
     registerSend(IPC.send.compact, () => engine?.postMessage({ type: "compact" }));
     registerSend(IPC.send.newSession, () =>

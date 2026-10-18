@@ -3,8 +3,8 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · `v0.1.6` multiplataforma publicada · M8 implementado · M7 planejado**
-Data: 2026-10-17
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.6` multiplataforma publicada · `v0.1.7` candidato preparado · M8 implementado · M7 planejado**
+Data: 2026-10-18
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
 
@@ -16,6 +16,11 @@ Desktop (1–500, padrão 50), fila de mensagens e indicador de atividade foram 
 tarefas do agente no chat e Skills visuais de Minecraft reforçadas. O RubyCLI foi pinado em
 `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`. A CI `39068759583` e o workflow de release
 `39068771826` passaram em Windows, Linux e macOS; a release foi publicada com 17 assets.
+**Candidato `v0.1.7` — 2026-10-18:** Navegador, Git, Worktrees e MCP
+passaram a compartilhar a área lateral direita. Git mostra status/diff, stage/unstage e commit
+explícito; Worktrees lista, cria, abre e remove worktrees limpos. O painel MCP foi simplificado e os
+subagentes agora executam em segundo plano, com consulta por ID e restauração de status pela sessão.
+`npm run build` passou; a publicação multiplataforma ainda aguarda o workflow de release.
 Historicamente, a `v0.1.3` foi publicada com 19 artefatos. Na validação local daquela rodada,
 `smoke-markdown`, `smoke-session-history` e `smoke-browser` passaram; `smoke-main` recebeu HTTP 502
 do provider, `smoke-permissions` não completou uma segunda chamada ao provider e `smoke-mcp` não foi
@@ -592,8 +597,9 @@ recentes, múltiplas abas e auto-continuação foram concluídos na etapa M6 aba
   telemetria suficiente.
 - `cachedTokens` passa do evento de observabilidade existente do RubyCLI para o contrato IPC do
   Desktop. O indicador separa chamadas com cache reportado e explica quando os dados são parciais.
-- Limites: tokens/cache não são gravados no histórico e começam a contar nesta execução; contexto
-  é uma estimativa das mensagens, sem detalhar system prompt ou definições de ferramentas.
+- Limites: tokens/cache não são gravados no histórico e começam a contar nesta execução. O medidor
+  usa a estimativa do engine enquanto a chamada está em andamento e, quando disponível, os tokens
+  de entrada reportados pelo provider após a resposta; a compactação usa a estimativa interna.
 - `smoke-markdown.cjs` confirma que os quatro painéis de estatísticas e o seletor abrem com dados.
 
 ### M4 — Sub-agentes + Orquestração
@@ -607,8 +613,8 @@ recentes, múltiplas abas e auto-continuação foram concluídos na etapa M6 aba
   alternativa; nunca trocar silenciosamente.
 - Aceitar instruções do usuário em linguagem natural para definir quantidade, papel, modelo, effort
   e foco dos subagentes. O orquestrador pode recomendar uma divisão e justificar modelo/effort;
-  para cada agente, o usuário escolhe iniciar com a recomendação da IA ou ajustar os parâmetros
-  manualmente antes de iniciar.
+  iniciar autonomamente com a recomendação é o padrão. Só abrir a configuração manual quando o
+  usuário pedir para escolher, revisar ou editar os parâmetros antes de iniciar.
 - Permitir instruções próprias por worker (papel, contexto, limites, ferramentas e formato da
   entrega), funcionando como um harness configurável e não apenas como texto da tarefa.
 - Oferecer uma chamada estruturada para a IA fazer perguntas de esclarecimento ao usuário. A
@@ -618,8 +624,9 @@ recentes, múltiplas abas e auto-continuação foram concluídos na etapa M6 aba
 
 **Desktop**
 
-- Perguntar inline se a IA deve configurar e iniciar o subagente ou se o usuário quer editar modelo,
-  effort e orientações; mostrar a proposta antes da escolha e manter alternativas explícitas.
+- Iniciar o subagente com a proposta da IA sem pergunta por padrão. Se o usuário pedir configuração
+  manual, mostrar o formulário inline para editar modelo, effort e orientações; alternativas continuam
+  identificadas antes do início.
 - Mostrar a pergunta como cartão inline no chat, com opções selecionáveis e campo de resposta
   livre; identificar quem perguntou, enviar a resposta ao agente correto e retomar o turno.
 - Tratar respostas, cancelamento, abort, reset e shutdown para que nenhuma espera fique pendurada.
@@ -638,6 +645,11 @@ recentes, múltiplas abas e auto-continuação foram concluídos na etapa M6 aba
 **Desktop**
 
 - UI: árvore de subagentes com progresso, status, custo/tokens por agente; diff do worktree antes do merge.
+- A aba lista agentes ativos e finalizados, abre tarefa/orientações/atividade e permite limpar os
+  finalizados da lista; essa limpeza fica registrada na sessão sem remover cartões do chat.
+- `task` inicia subagentes em segundo plano e retorna o ID imediatamente. Tarefas independentes
+  podem ser lançadas em paralelo enquanto o principal continua seu trabalho; `subagent_status` lista,
+  consulta o contexto e o resultado de cada agente ou aguarda por um intervalo limitado.
 - Em cada agente, mostrar modelo, effort, papel e instruções; manter as perguntas e respostas no
   histórico visível do chat, identificando qual agente perguntou e recebeu cada resposta.
 - **Entregável:** orquestração multi-agente real.
@@ -747,6 +759,21 @@ está configurada. Smoke dos executáveis instalados e validação MCP no pacote
 - Verificação: `npm run build` passou; os seis smoke scripts Electron passaram com exit 0 quando
   executados com acesso ampliado. O build e o Electron no sandbox restrito falham em caminhos de
   acesso/cache, então essa diferença de ambiente permanece documentada.
+
+### M6.1 — Git e worktrees no painel direito ✅
+
+- Abas Navegador, Git, Worktrees e MCP compartilham o painel direito; o chat permanece montado durante
+  a troca e um navegador aberto pelo agente volta automaticamente à frente.
+- Git mostra branch, upstream e divergência, arquivos alterados e diff. O usuário pode stage/unstage
+  arquivos e criar commits somente com mensagem explícita e arquivos staged.
+- Worktrees são listados com branch, HEAD e estado limpo/sujo; é possível criar branch/worktree,
+  abrir como workspace e remover quando limpo. O app recusa remover o worktree principal, bloqueado,
+  sujo ou em uso.
+- A execução usa `execFile` com argumentos separados, sem shell; o IPC aceita operações tipadas e os
+  paths de arquivos são validados contra o status do Git. Requer instalação local do Git.
+- Fetch/pull/push, checkout de branch, merge e resolução de conflitos permanecem como próximos itens
+  caso o usuário queira sincronização remota pela UI.
+- Validação local: `npm run typecheck` e `npm run build` passaram; smokes não foram executados.
 
 ### M7 — Anexos multimodais e geração de imagens (planejado)
 

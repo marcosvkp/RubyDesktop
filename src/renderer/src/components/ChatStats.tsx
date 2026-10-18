@@ -12,6 +12,7 @@ export function ChatStats(): React.JSX.Element {
   const usage = useStore((s) => s.sessionUsage);
   const contextUsed = useStore((s) => s.contextUsed);
   const contextWindow = useStore((s) => s.contextWindow);
+  const contextSource = useStore((s) => s.contextSource);
   const [openStat, setOpenStat] = useState<StatKey | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -115,13 +116,21 @@ export function ChatStats(): React.JSX.Element {
         align="right"
       >
         <PopoverTitle icon={<Timer className="h-3.5 w-3.5" />}>Uso da janela de contexto</PopoverTitle>
-        <DetailRow label="Histórico estimado" value={`${formatNumber(contextUsed)} tok`} strong />
+        <DetailRow
+          label={contextSource === "provider" ? "Entrada na última chamada" : "Estimativa da engine"}
+          value={`${formatNumber(contextUsed)} tok`}
+          strong
+        />
         <DetailRow label="Janela do modelo" value={contextWindow ? `${formatNumber(contextWindow)} tok` : "—"} />
-        <DetailRow label="Uso estimado" value={`${contextPercent}%`} />
+        <DetailRow label={contextSource === "provider" ? "Uso reportado" : "Uso estimado"} value={`${contextPercent}%`} />
         <div className="my-2 h-1.5 overflow-hidden rounded-full bg-white/10">
           <div className={cn("h-full rounded-full transition-all", contextPercent >= 75 ? "bg-destructive" : contextPercent >= 60 ? "bg-chart-3" : "bg-chart-5")} style={{ width: `${contextPercent}%` }} />
         </div>
-        <PopoverHint>Estimativa das mensagens serializadas. O prompt de sistema e as definições de ferramentas não são discriminados pelo engine nesta versão. A compactação automática começa perto de 75%.</PopoverHint>
+        <PopoverHint>
+          {contextSource === "provider"
+            ? "Tokens de entrada reportados pelo provider na última chamada, incluindo o contexto enviado nessa requisição. Antes da próxima resposta, a engine mostra sua estimativa atual. A compactação automática segue a estimativa interna da engine."
+            : "Estimativa da engine baseada nas mensagens e no prompt de sistema antes da chamada. O provider pode reportar a contagem real ao concluir a resposta; definições de ferramentas podem variar por provider. A compactação automática usa a estimativa interna da engine."}
+        </PopoverHint>
       </StatButton>
     </div>
   );
