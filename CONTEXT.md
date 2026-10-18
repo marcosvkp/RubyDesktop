@@ -7,10 +7,10 @@
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e M8 (Skills de modding Minecraft) estão implementados.
-O candidato `v0.1.7` reúne o painel local de Git/worktrees, melhorias no painel MCP e execução
-paralela consultável dos subagentes e fixa o RubyCLI em
-`3af15adcd0a78cb37b459f0947a7dcc4d47c9723`. O primeiro workflow falhou porque a variável do
-repositório apontava para a engine anterior; o pin foi corrigido e a publicação está sendo refeita.
+`v0.1.7` foi publicada em 2026-10-18 com o painel local de Git/worktrees, melhorias no painel MCP e
+execução paralela consultável dos subagentes. Fixa o RubyCLI em
+`3af15adcd0a78cb37b459f0947a7dcc4d47c9723` e inclui 17 artefatos Windows, Linux e macOS. A CI
+`39093051445` e a release `39093055854` passaram nos três sistemas.
 A hardening pass de `FIX.md` também foi implementada no Desktop. A release atual `v0.1.6` fixa o
 RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutidas e foi publicada
 em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
@@ -19,7 +19,20 @@ configurável de 1 a 500 (padrão 50). Windows/macOS permanecem sem assinatura; 
 atualização. A próxima etapa de produto planejada é M7 (anexos de imagem e geração de imagens). O
 workflow compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
 
-### Verificação atual — 2026-10-17
+### Verificação atual — 2026-10-18
+
+- RubyDesktop `v0.1.7`: release publicada em
+  https://github.com/marcosvkp/RubyDesktop/releases/tag/v0.1.7 com 17 assets Windows, Linux e macOS.
+  A CI `39093051445` e a release Actions `39093055854` passaram nos três runners. O workflow validou
+  o pin `rubycli@3af15adcd0a78cb37b459f0947a7dcc4d47c9723`, empacotou e verificou cada aplicação.
+  Windows/macOS estão sem assinatura; a release avisa que o sistema pode exibir alertas e que o
+  update automático não fica disponível nessas plataformas sem assinatura.
+
+- RubyCLI: commit `3af15ad` publicado em `main`, com busca DuckDuckGo e atualizações do runtime MCP.
+  Typecheck, lint, Prettier, build e hooks de commit passaram. O hook local de push executou os testes:
+  82 arquivos passaram, 1164 testes passaram e 70 foram ignorados; 21 cenários live falharam com
+  exit `3221226505` no Windows e um teste de compactação expirou em 5s. O CI do Desktop executou os
+  checks determinísticos da engine nos três sistemas e passou.
 
 - RubyDesktop `v0.1.6`: publicada após sucesso da release Actions `39068771826`, com 17 artefatos
   Windows, Linux e macOS. A CI `39068759583` passou nos três sistemas; o pin do RubyCLI é

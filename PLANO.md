@@ -3,7 +3,7 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.6` multiplataforma publicada · `v0.1.7` candidato preparado · M8 implementado · M7 planejado**
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.6` e `v0.1.7` multiplataforma publicadas · M8 implementado · M7 planejado**
 Data: 2026-10-18
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
@@ -16,14 +16,14 @@ Desktop (1–500, padrão 50), fila de mensagens e indicador de atividade foram 
 tarefas do agente no chat e Skills visuais de Minecraft reforçadas. O RubyCLI foi pinado em
 `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`. A CI `39068759583` e o workflow de release
 `39068771826` passaram em Windows, Linux e macOS; a release foi publicada com 17 assets.
-**Candidato `v0.1.7` — 2026-10-18:** RubyCLI pinado em
+**`v0.1.7` — 2026-10-18:** RubyCLI pinado em
 `3af15adcd0a78cb37b459f0947a7dcc4d47c9723`. Navegador, Git, Worktrees e MCP
 passaram a compartilhar a área lateral direita. Git mostra status/diff, stage/unstage e commit
 explícito; Worktrees lista, cria, abre e remove worktrees limpos. O painel MCP foi simplificado e os
 subagentes agora executam em segundo plano, com consulta por ID e restauração de status pela sessão.
-`npm run build` passou. O primeiro workflow falhou por divergência entre `RUBYCLI_REF` e o lockfile;
-ambos agora apontam para `3af15adcd0a78cb37b459f0947a7dcc4d47c9723`, e a publicação multiplataforma
-está sendo refeita.
+`npm run build` passou; CI `39093051445` e release `39093055854` passaram nos três sistemas. A release
+foi publicada com 17 assets para Windows, Linux e macOS. Os instaladores Windows/macOS são unsigned,
+portanto o sistema pode exibir avisos e atualizações automáticas dessas plataformas não estão ativas.
 Historicamente, a `v0.1.3` foi publicada com 19 artefatos. Na validação local daquela rodada,
 `smoke-markdown`, `smoke-session-history` e `smoke-browser` passaram; `smoke-main` recebeu HTTP 502
 do provider, `smoke-permissions` não completou uma segunda chamada ao provider e `smoke-mcp` não foi
