@@ -8,7 +8,9 @@
 
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e M8 (Skills de modding Minecraft) estão implementados.
 O candidato `v0.1.7` reúne o painel local de Git/worktrees, melhorias no painel MCP e execução
-paralela consultável dos subagentes. Ainda aguarda publicação pela release multiplataforma.
+paralela consultável dos subagentes e fixa o RubyCLI em
+`3af15adcd0a78cb37b459f0947a7dcc4d47c9723`. O primeiro workflow falhou porque a variável do
+repositório apontava para a engine anterior; o pin foi corrigido e a publicação está sendo refeita.
 A hardening pass de `FIX.md` também foi implementada no Desktop. A release atual `v0.1.6` fixa o
 RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutidas e foi publicada
 em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
