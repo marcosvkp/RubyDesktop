@@ -284,13 +284,13 @@ async function runBrowserChecks(api) {
     throw new Error("creating a browser tab did not make it active");
   }
   const visibleTabs = await api.readDom(
-    `document.querySelectorAll('[role="tab"]').length`,
+    `document.querySelector('[data-testid="browser-panel"]')?.querySelectorAll('[role="tab"]').length ?? 0`,
   );
   let renderedTabCount = visibleTabs;
   for (let i = 0; i < 30 && renderedTabCount !== 2; i++) {
     await new Promise((r) => setTimeout(r, 100));
     renderedTabCount = await api.readDom(
-      `document.querySelectorAll('[role="tab"]').length`,
+      `document.querySelector('[data-testid="browser-panel"]')?.querySelectorAll('[role="tab"]').length ?? 0`,
     );
   }
   if (renderedTabCount !== 2)
@@ -301,12 +301,12 @@ async function runBrowserChecks(api) {
     throw new Error("selecting the first tab did not restore its page");
   }
   let selectedTab = await api.readDom(
-    `document.querySelector('[role="tab"][aria-selected="true"]')?.id`,
+    `document.querySelector('[data-testid="browser-panel"] [role="tab"][aria-selected="true"]')?.id`,
   );
   for (let i = 0; i < 30 && selectedTab !== `browser-tab-${firstTabId}`; i++) {
     await new Promise((r) => setTimeout(r, 100));
     selectedTab = await api.readDom(
-      `document.querySelector('[role="tab"][aria-selected="true"]')?.id`,
+      `document.querySelector('[data-testid="browser-panel"] [role="tab"][aria-selected="true"]')?.id`,
     );
   }
   if (selectedTab !== `browser-tab-${firstTabId}`)
@@ -320,12 +320,12 @@ async function runBrowserChecks(api) {
     throw new Error("closing the second tab did not preserve the first tab");
   }
   let remainingTabs = await api.readDom(
-    `document.querySelectorAll('[role="tab"]').length`,
+    `document.querySelector('[data-testid="browser-panel"]')?.querySelectorAll('[role="tab"]').length ?? 0`,
   );
   for (let i = 0; i < 30 && remainingTabs !== 1; i++) {
     await new Promise((r) => setTimeout(r, 100));
     remainingTabs = await api.readDom(
-      `document.querySelectorAll('[role="tab"]').length`,
+      `document.querySelector('[data-testid="browser-panel"]')?.querySelectorAll('[role="tab"]').length ?? 0`,
     );
   }
   if (remainingTabs !== 1)

@@ -11,15 +11,48 @@
 execução paralela consultável dos subagentes. Fixa o RubyCLI em
 `3af15adcd0a78cb37b459f0947a7dcc4d47c9723` e inclui 17 artefatos Windows, Linux e macOS. A CI
 `39093051445` e a release `39093055854` passaram nos três sistemas.
-A hardening pass de `FIX.md` também foi implementada no Desktop. A release atual `v0.1.6` fixa o
+A hardening pass de `FIX.md` também foi implementada no Desktop. A release histórica `v0.1.6` fixa o
 RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutidas e foi publicada
 em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
 e persistente, além da lista de tarefas do agente no chat. O agente principal tem limite de ciclos
 configurável de 1 a 500 (padrão 50). Windows/macOS permanecem sem assinatura; Linux inclui o feed de
-atualização. A próxima etapa de produto planejada é M7 (anexos de imagem e geração de imagens). O
-workflow compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
+atualização. M7.2 (cotação, geração, edição por caminho de projeto e gravação de imagens pelo provider
+Ruby) está implementado localmente, ainda sem release; anexos de entrada e hardening/restauração
+abrangente de M7 continuam pendentes. O workflow
+compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
 
-### Verificação atual — 2026-10-18
+### Verificação atual — 2026-10-19
+
+- M7.2 local: RubyCLI oferece `image_models` (`GET /v1/images/models`), `image_quote`
+  (`POST /v1/images/quote`) e `image_generate` (`POST /v1/images/generations`); o Desktop adiciona
+  `image_edit` (`POST /v1/images/edits`) com uma referência dentro do projeto. As ferramentas exigem
+  cotação recente e idêntica em modelo, tamanho, qualidade, quantidade e número de referências. A
+  aprovação por chamada continua ativa por padrão; Configurações tem um opt-in persistido para
+  geração/edição autônoma que evita a confirmação de créditos por imagem. O resultado
+  base64 atravessa `AgentEvent.tool_result.images`, separado de `FunctionResultPart`; MIME, assinatura,
+  quantidade, timeout e limites de payload são validados. O Desktop mostra prévia e download no cartão
+  da tool e salva a imagem como anotação `generated-image` no JSONL local, sem inseri-la no histórico
+  enviado ao modelo. Além da anotação local da sessão, `image_generate` e `image_edit` agora exigem
+  `save_path`: PNG/JPEG/WebP também são gravados em um caminho relativo ao workspace, validam links
+  simbólicos e não sobrescrevem arquivos. A API mantém sua
+  garantia de não armazenar prompts/imagens no servidor.
+- A tool `image_models` consulta `GET /v1/images/models` e retorna os ids habilitados para geração;
+  o agente não deve procurar esses ids nos arquivos do workspace nem usar o catálogo de modelos de chat.
+  `supportsVision` não é usado como substituto. A edição aceita PNG/JPEG/WebP no workspace, até 12 MB;
+  anexos enviados pelo usuário no composer ainda não estão implementados.
+- A cotação envia `referenceCount: 0`, e o parser aceita os campos de créditos aninhados e como número
+  ou string. A geração aceita `resolution` e `aspect_ratio`, lê `media_type` no item ou na resposta e exibe
+  `usage.credits` quando a API retorna esse dado.
+- A correção de cotação foi compilada nos dois repositórios e passou em 67 testes focados. A API não
+  foi chamada ao vivo e os seis smoke scripts Desktop não foram repetidos nesta revisão.
+- RubyDesktop `npm run build` passou. Os seis smoke scripts Electron passaram: `smoke-main`,
+  `smoke-permissions` (em home/workspace temporários isolados), `smoke-mcp`, `smoke-browser`,
+  `smoke-markdown` e `smoke-session-history`. Os smoke harnesses foram alinhados à restauração
+  assíncrona da sessão, aos controles atuais de perguntas e às abas globais do painel lateral.
+- RubyCLI: build, typecheck, ESLint, Prettier e os 67 testes focados de imagem/executor/agente passaram.
+  Na suíte completa, 1169 testes passaram e 70 foram ignorados; falharam 21 cenários live de avaliação
+  com exit `3221226505` no Windows e um teste de compactação aninhada excedeu 5s. Essas falhas são do
+  ambiente/matriz existente e não dos testes determinísticos da nova tool.
 
 - RubyDesktop `v0.1.7`: release publicada em
   https://github.com/marcosvkp/RubyDesktop/releases/tag/v0.1.7 com 17 assets Windows, Linux e macOS.
@@ -280,28 +313,39 @@ o provider. Builds locais sem publicação também continuam possíveis sem cert
 - Verificação local desta implementação: `npm run typecheck` e `npm run build` passaram. Os smoke
   scripts não foram executados nesta rodada.
 
-### M7 planejado — Anexos e geração de imagens (não implementado)
+### M7 parcial — Geração, edição e gravação de imagens; anexos de entrada pendentes
 
 O composer atual envia texto. O indicador `supportsVision` do catálogo só descreve capacidade do
-modelo; ele não significa que o Desktop envie imagens. A tool `browser_screenshot` salva PNG na
-pasta de dados do app e retorna texto, sem anexar a imagem à conversa.
+modelo; ele não significa que o Desktop envie imagens anexadas pelo usuário. A tool `browser_screenshot`
+salva PNG na pasta de dados do app e retorna texto, sem anexar a imagem à conversa. M7.2 adiciona
+geração, edição por caminho local e gravação opcional no workspace via Ruby API.
 
-- **M7.1 — Anexos de entrada:** escolher imagem, colar da área de transferência ou arrastar e soltar;
+- **M7.1 — Anexos de entrada (pendente):** escolher imagem, colar da área de transferência ou arrastar e soltar;
   mostrar prévia e permitir remoção antes do envio. Validar MIME e tamanho no processo principal e
   transportar bytes/referências pelo IPC sem dar acesso geral ao filesystem ao renderer.
-- **M7.2 — Visão no chat:** enviar texto e imagens no mesmo turno por um payload multimodal real do
-  engine; explicar ou impedir o envio quando o modelo escolhido não aceitar imagens. Persistir
-  referências dos anexos na sessão e restaurá-las ao reabrir, sem gravar base64 no JSONL.
-- **M7.3 — Tool de geração:** criar uma tool do agente que use a chave Ruby já configurada e permita
-  escolher explicitamente um modelo de geração. Separar entrada visual (`supportsVision`) de geração:
-  conferir catálogo, endpoint, autenticação e limites do provider antes de expor a tool. Mostrar o
-  resultado como anexo no chat, persistir a referência e oferecer salvar/exportar.
-- **M7.4 — Verificação:** cobrir validação de anexos, roteamento para modelos compatíveis, persistência
-  e restauração, erros de provider e geração nos testes determinísticos.
+- **M7.2 — Tools de imagem (implementadas localmente):** RubyCLI exporta `createImageTools` e o Desktop
+  registra as tools somente com provider Ruby e chave configurada. `image_models` consulta
+  `GET /v1/images/models`; `image_quote` usa
+  `POST /v1/images/quote`; `image_generate` chama `POST /v1/images/generations`; e `image_edit`
+  chama `POST /v1/images/edits` com multipart e uma referência PNG/JPEG/WebP relativa ao workspace
+  de até 12 MB. Edição exige cotação com `referenceCount: 1`; geração usa `referenceCount: 0`. Ambas
+  exigem `save_path` relativo ao projeto, bloqueiam symlink escapes e não sobrescrevem arquivos. Sem
+  destino válido, a chamada falha antes de gerar ou editar; por padrão, o agente escolhe um nome
+  descritivo e único em `assets/generated/`.
+  A confirmação por imagem fica ativa por padrão; Configurações tem uma preferência persistente e
+  opt-in de autonomia. A estimativa continua automática e não abre uma pergunta ao usuário. O
+  executor entrega base64 ao host em campo UI-only separado do resultado que volta ao modelo. O
+  renderer mostra a prévia e oferece download; o evento versionado persiste a imagem no JSONL local.
+- **Armazenamento:** toda geração/edição grava o arquivo no projeto via `save_path` e mantém a prévia
+  no JSONL local da sessão para restauração. Não é usada pasta temporária. A Ruby declara que prompts e
+  imagens não são armazenados no servidor.
+- **M7.3 — Segurança e aceitação (parcial):** testes determinísticos cobrem a geração; a edição valida
+  caminho, tamanho, MIME e assinatura. Ainda faltam anexos de entrada, metadados adicionais do catálogo
+  e smokes específicos para edição, gravação e preferência de autonomia.
 
-**Decisões técnicas pendentes:** formatos e limite de tamanho dos anexos; quantidade de imagens por
-turno; modelos/endpoints de geração disponíveis no catálogo Ruby; pasta de saída e aprovação antes
-de gravar imagens no workspace.
+**Próxima etapa:** anexos de entrada com seleção/colar/arrastar, validação no processo principal,
+payload multimodal com `supportsVision` e persistência local por referência. Depois, acrescentar smokes
+de regressão para edição, gravação e preferência de autonomia.
 
 ---
 
@@ -507,8 +551,8 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 
 1. Executar `npm run eval` e os smokes que dependem do provider quando houver uma chave válida e o
    serviço estiver respondendo; investigar a assertion nativa do Node se continuar após autenticar.
-2. Iniciar M7 com uma verificação técnica do catálogo Ruby, endpoint de geração e contrato multimodal
-   do engine; depois implementar anexos de imagem e a tool de geração.
+2. Continuar M7 com anexos de entrada e roteamento multimodal para modelos com visão; depois criar
+   smokes para edição, salvamento no workspace e preferência de geração autônoma.
 3. Validar os instaladores empacotados em Windows, macOS e Linux. Windows é o teste local disponível;
    macOS/Linux dependem de máquinas desses sistemas.
 4. Configurar certificados Windows/macOS caso se queira reduzir alertas do instalador e habilitar

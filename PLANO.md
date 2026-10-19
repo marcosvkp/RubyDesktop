@@ -3,8 +3,8 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.6` e `v0.1.7` multiplataforma publicadas · M8 implementado · M7 planejado**
-Data: 2026-10-18
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.7` multiplataforma publicada · M8 implementado · M7.2 imagens implementado localmente · M7.1/M7.3 pendentes**
+Data: 2026-10-19
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
 
@@ -778,12 +778,11 @@ está configurada. Smoke dos executáveis instalados e validação MCP no pacote
   caso o usuário queira sincronização remota pela UI.
 - Validação local: `npm run typecheck` e `npm run build` passaram; smokes não foram executados.
 
-### M7 — Anexos multimodais e geração de imagens (planejado)
+### M7 — Anexos multimodais e geração de imagens (parcial)
 
 O composer atualmente transmite texto puro. O campo `supportsVision` do catálogo apenas identifica
-modelos capazes de receber imagens; o Desktop ainda não envia bytes de imagem nem tem uma tool de
-geração. O primeiro passo é confirmar que o provider Ruby oferece endpoint de visão/geração
-compatível com a chave configurada e descobrir como o catálogo identifica essas capacidades.
+modelos capazes de receber imagens; o Desktop ainda não envia imagens de entrada. A geração via API
+Ruby foi implementada em M7.2, sem inferir capacidade de geração a partir de `supportsVision`.
 
 #### M7.1 — Anexar imagens ao chat
 
@@ -797,27 +796,50 @@ compatível com a chave configurada e descobrir como o catálogo identifica essa
 - Guardar anexos em armazenamento controlado pelo app e registrar referências estáveis no histórico;
   reabrir a sessão deve manter prévia e acesso às imagens.
 
-#### M7.2 — Tool de geração de imagens
+#### M7.2 — Tools de geração e edição de imagens ✅ local
 
-- Criar uma tool do engine para gerar imagem a partir de uma instrução, usando a chave já configurada
-  no Ruby Desktop e permitindo escolher explicitamente um modelo de geração do catálogo.
-- Modelos de visão e modelos de geração são capacidades diferentes: não inferir geração a partir de
-  `supportsVision`. A tool só aparece para modelos/endpoints declarados pelo provider.
-- Definir parâmetros apenas conforme suporte real da API (por exemplo, tamanho ou proporção) e
-  tratar indisponibilidade, limites, timeout e erros de autenticação sem perder a conversa.
-- Mostrar o resultado como anexo inline, persistir sua referência e oferecer salvar/exportar. Para
-  gravar no workspace, usar o fluxo de aprovação já aplicado a operações de escrita.
+- `image_quote` chama `POST /v1/images/quote` com modelo, tamanho, qualidade e quantidade; informa
+  `estimatedCredits` e a faixa `minEstimatedCredits`–`maxEstimatedCredits` quando retornadas. Envia
+  `referenceCount: 0` para geração sem imagem de referência e aceita os valores aninhados como número
+  ou string.
+- `image_generate` exige uma cotação de até cinco minutos com os mesmos parâmetros. Por padrão, a
+  chamada que consome créditos pede aprovação. Configurações do Desktop oferece um opt-in persistente
+  para geração/edição autônoma; mesmo nesse modo a cotação é consultada automaticamente antes da ação.
+  Usa a chave Ruby injetada no engine host e chama `POST /v1/images/generations`; não repete chamadas
+  automaticamente para evitar cobrança duplicada após timeout.
+- `image_models` consulta `GET /v1/images/models` e fornece os ids habilitados na conta. O agente usa
+  esse catálogo específico, sem procurar no workspace ou inferir geração a partir de `supportsVision`.
+- A API devolve base64, que é validado por MIME/assinatura, tamanho e quantidade. O executor entrega os
+  bytes em `AgentEvent.tool_result.images`, fora de `FunctionResultPart`, para não os incluir no próximo
+  contexto do modelo. A geração encaminha `resolution` e `aspect_ratio`, reconhece `media_type` e
+  informa `usage.credits` quando disponível. O Desktop mostra prévia inline e download no cartão da tool.
+- O histórico local salva o resultado como evento `generated-image` do JSONL. Reabrir a conversa
+  restaura a prévia; isso grava os bytes somente na máquina do usuário. O contrato do provider declara
+  que prompt/imagem não são armazenados no servidor e que seus logs guardam consumo/metadados.
+- A tool só é registrada no Desktop quando o provider é Ruby e há chave configurada. A edição
+  `image_edit` chama `POST /v1/images/edits` com multipart, referência PNG/JPEG/WebP relativa ao
+  workspace de até 12 MB, e exige quote com `referenceCount: 1`. Geração usa `referenceCount: 0`.
+- `image_generate` e `image_edit` exigem `save_path` relativo ao projeto e rejeitam a chamada antes de
+  gerar/editar se o destino estiver ausente ou inválido. O host valida contenção incluindo links
+  simbólicos e recusa sobrescrever arquivos. O agente deve escolher um nome descritivo e único em
+  `assets/generated/` quando o usuário não informar o destino. A extensão salva corresponde ao MIME
+  real retornado pela API; o cartão também mantém prévia e download.
+- A imagem fica no arquivo do projeto e como base64 no evento JSONL local para restaurar a prévia; não
+  existe cópia em pasta temporária. O base64 não entra no histórico enviado ao modelo.
 
-#### M7.3 — Segurança e critérios de aceite
+#### M7.3 — Segurança e critérios de aceite (parcial)
 
-- Testes determinísticos para limites, MIME, IPC, modelos compatíveis, erros, histórico e restauração.
-- Smoke de ponta a ponta com provider simulado para envio e geração; teste live é uma verificação
-  adicional, não requisito da suíte determinística.
-- Restaurar anexos locais com a sessão e informar claramente quando um arquivo foi removido ou ficou
-  inacessível.
+- RubyCLI tem testes determinísticos para cotação, autenticação, limite/base64/MIME, confirmação e
+  isolamento dos bytes do contexto. Smokes verificam exibição ao vivo e restauração.
+- Os seis smoke scripts Desktop passaram com artefatos compilados. `npm run build` passou.
+- Na suíte RubyCLI completa, 1169 testes passaram e 70 foram ignorados; 21 casos live da matriz de
+  avaliação falharam com exit `3221226505` no Windows e um teste de compactação aninhada expirou em 5s.
+- Permanecem pendentes anexos de entrada e uso mais completo dos metadados de `/images/models` para
+  seleção por capacidade/preferência. A edição, gravação e preferência autônoma precisam de smokes
+  determinísticos próprios.
 
-**Decisões do primeiro spike:** endpoint Ruby e modelos de geração disponíveis, formatos e limites
-de upload, múltiplas imagens por mensagem, pasta de saída e aprovação para salvar no workspace.
+**Próxima tarefa:** implementar anexos de entrada (arquivo, clipboard e drag-and-drop), validar e persistir
+referências locais, e transportar mensagem multimodal somente para modelos com `supportsVision`.
 
 ### M8 — Skills de modding Minecraft (implementadas e commitadas)
 
@@ -907,11 +929,12 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 
 ## 10. Próximo passo
 
-M0–M6 foram entregues e `v0.1.6` é a release mais recente. M8 está no RubyCLI e no Desktop. O próximo
-marco de produto proposto continua sendo M7:
-anexar imagens no chat para modelos com visão e disponibilizar uma tool de geração que use a chave
-Ruby já configurada e um modelo de imagem selecionável. Começar confirmando quais endpoints e modelos
-o provider oferece, pois capacidade de receber imagens não garante capacidade de gerar.
+M0–M6 foram entregues e `v0.1.7` é a release mais recente. M8 está no RubyCLI e no Desktop. M7.2
+(cotação, geração, edição por arquivo do workspace, gravação de assets e prévia inline de imagens) está
+implementado localmente, sem release. O próximo marco é M7.1: anexar imagens de entrada, persistir
+referências locais e enviar payload multimodal somente a modelos que anunciam `supportsVision`. Depois,
+adicionar smokes para edição, salvamento e autonomia, e aproveitar mais metadados do catálogo específico
+de modelos de geração.
 
 Em paralelo, permanecem tarefas operacionais: repetir a matriz live com uma chave válida e provider
 disponível; validar os instaladores em Windows, macOS e Linux; e configurar assinatura se for

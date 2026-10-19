@@ -18,6 +18,7 @@
 const { runScenario, CHANNEL } = require("./smoke-harness.cjs");
 
 const SHOT = process.env.SMOKE_SCREENSHOT;
+let sessionLoaded = false;
 
 /** Everything the model actually emits in practice, in one message. */
 const SAMPLE = `## O que o mod adiciona
@@ -72,8 +73,16 @@ runScenario({
   workspace: process.env.RUBY_DESKTOP_WORKSPACE || process.cwd(),
   timeoutMs: Number(process.env.SMOKE_TIMEOUT_MS || 120_000),
   hooks: {
+    async onMessage(message) {
+      if (message.type === "sessions") sessionLoaded = true;
+    },
     async onReady(_ready, api) {
       try {
+        const deadline = Date.now() + 5_000;
+        while (!sessionLoaded && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        if (!sessionLoaded) throw new Error("session transcript did not finish loading");
+        await new Promise((resolve) => setTimeout(resolve, 100));
         await check(api);
       } catch (err) {
         api.finish(1, `markdown checks failed: ${err && err.stack ? err.stack : err}`);
@@ -97,12 +106,25 @@ async function check(api) {
     const last = root.lastElementChild;
     if (!last) return { present: false };
     const style = getComputedStyle(last, "::after");
-    return { present: true, content: style.content, bg: style.backgroundColor, width: style.width };
+    return {
+      present: true,
+      rootClass: root.className,
+      lastTag: last.tagName,
+      lastClass: last.className,
+      lastText: last.innerText,
+      markdownCount: document.querySelectorAll(".markdown").length,
+      messageCount: document.querySelectorAll('[data-testid="assistant-message"]').length,
+      messageText: root.parentElement?.innerText,
+      content: style.content,
+      twContent: getComputedStyle(last).getPropertyValue("--tw-content"),
+      bg: style.backgroundColor,
+      width: style.width,
+    };
   })()`);
   if (!caret.present) throw new Error("no markdown container while streaming");
   // `content: none` is what a missing pseudo-element reports.
   if (!caret.content || caret.content === "none") {
-    throw new Error(`the streaming caret was not drawn (::after content = ${caret.content})`);
+    throw new Error(`the streaming caret was not drawn: ${JSON.stringify(caret)}`);
   }
   if (caret.bg === "rgba(0, 0, 0, 0)") {
     throw new Error("the streaming caret has no background colour");
@@ -196,6 +218,45 @@ async function check(api) {
   const xssExecuted = await api.readDom("window.__rubyMarkdownXss === true");
   if (xssExecuted) throw new Error("raw HTML executed inside assistant markdown");
   api.log("ok: assistant raw HTML did not execute");
+
+  // --- Generated image tool result -----------------------------------------
+  // Image bytes travel on the UI-only event field, never in the tool result text.
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=";
+  send({
+    type: "event",
+    event: {
+      type: "tool_call",
+      id: "smoke-image-call",
+      name: "image_generate",
+      args: { model: "smoke-image-model", prompt: "A single pixel" },
+    },
+  });
+  send({
+    type: "event",
+    event: {
+      type: "tool_result",
+      id: "smoke-image-call",
+      name: "image_generate",
+      result: "1 image generated.",
+      images: [{ mimeType: "image/png", base64: png, alt: "Smoke image" }],
+    },
+  });
+  await new Promise((r) => setTimeout(r, 250));
+  const imageDom = await api.readDom(`(() => {
+    const image = document.querySelector('[data-testid="generated-image-preview"]');
+    const download = document.querySelector('[data-testid="generated-image-download"]');
+    return {
+      source: image?.getAttribute('src') ?? null,
+      alt: image?.getAttribute('alt') ?? null,
+      download: download?.getAttribute('download') ?? null,
+      base64VisibleAsText: document.body.innerText.includes(${JSON.stringify(png)}),
+    };
+  })()`);
+  if (!imageDom.source?.startsWith("data:image/png;base64,"))
+    throw new Error(`generated image preview was not rendered: ${JSON.stringify(imageDom)}`);
+  if (!imageDom.download || imageDom.base64VisibleAsText)
+    throw new Error(`generated image download/privacy UI failed: ${JSON.stringify(imageDom)}`);
+  api.log("ok: generated image preview and download rendered without exposing base64 as text");
 
   const workflowMessage = "fixture workflow phase reached";
   send({

@@ -301,7 +301,7 @@ function runScenario({
       ok: false,
       error: "Unavailable in smoke harness.",
     }));
-    registerInvoke(IPC.invoke.getAgentSettings, () => ({ maxIterations: 50 }));
+    registerInvoke(IPC.invoke.getAgentSettings, () => ({ maxIterations: 50, autoImageGeneration: false }));
     registerInvoke(IPC.invoke.saveAgentSettings, async () => ({
       ok: false,
       error: "Unavailable in smoke harness.",

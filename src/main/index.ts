@@ -281,7 +281,10 @@ let engineStartPromise: Promise<void> | undefined;
 let engineStopPromise: Promise<void> | undefined;
 let engineBusy = false;
 let engineCompacting = false;
-const DEFAULT_AGENT_SETTINGS: AgentSettings = { maxIterations: 50 };
+const DEFAULT_AGENT_SETTINGS: AgentSettings = {
+  maxIterations: 50,
+  autoImageGeneration: false,
+};
 let agentSettings: AgentSettings = { ...DEFAULT_AGENT_SETTINGS };
 let preferredModel: string | undefined;
 let preferredReasoningEffort: ReasoningEffort | undefined;
@@ -372,10 +375,14 @@ async function loadAgentSettings(): Promise<void> {
   try {
     const saved = JSON.parse(await readFile(agentSettingsPath(), "utf8")) as {
       maxIterations?: unknown;
+      autoImageGeneration?: unknown;
     };
-    if (isValidMaxIterations(saved.maxIterations)) {
-      agentSettings = { maxIterations: saved.maxIterations };
-    }
+    agentSettings = {
+      maxIterations: isValidMaxIterations(saved.maxIterations)
+        ? saved.maxIterations
+        : DEFAULT_AGENT_SETTINGS.maxIterations,
+      autoImageGeneration: saved.autoImageGeneration === true,
+    };
   } catch {
     // A missing or malformed settings file falls back to the built-in defaults.
   }
@@ -446,6 +453,7 @@ async function doStartEngine(): Promise<void> {
 
   const env = { ...process.env } as Record<string, string>;
   env.RUBY_DESKTOP_MAX_ITERATIONS = String(agentSettings.maxIterations);
+  env.RUBY_DESKTOP_AUTO_IMAGE_GENERATION = String(agentSettings.autoImageGeneration);
   availableModels = undefined;
   if (preferredModel) env.RUBY_DESKTOP_PREFERRED_MODEL = preferredModel;
   else delete env.RUBY_DESKTOP_PREFERRED_MODEL;
@@ -827,23 +835,32 @@ ipcMain.handle(IPC.invoke.saveApiKey, async (_event, key: string) => {
 
 ipcMain.handle(
   IPC.invoke.saveAgentSettings,
-  async (_event, maxIterations: number) => {
+  async (_event, settings: AgentSettings) => {
     if (engineBusy || engineCompacting) {
       return {
         ok: false,
-        error: "Aguarde o turno e a compactação terminarem antes de alterar este limite.",
+        error: "Aguarde o turno e a compactação terminarem antes de alterar as configurações do agente.",
       };
     }
-    if (!isValidMaxIterations(maxIterations)) {
+    if (!settings || !isValidMaxIterations(settings.maxIterations)) {
       return {
         ok: false,
         error: "Informe um número inteiro entre 1 e 500 ciclos.",
       };
     }
-    if (maxIterations === agentSettings.maxIterations) return { ok: true };
+    if (typeof settings.autoImageGeneration !== "boolean") {
+      return { ok: false, error: "A opção de geração autônoma de imagens é inválida." };
+    }
+    const next: AgentSettings = {
+      maxIterations: settings.maxIterations,
+      autoImageGeneration: settings.autoImageGeneration,
+    };
+    if (
+      next.maxIterations === agentSettings.maxIterations &&
+      next.autoImageGeneration === agentSettings.autoImageGeneration
+    ) return { ok: true };
 
     const previous = agentSettings;
-    const next = { maxIterations };
     try {
       await persistAgentSettings(next);
       agentSettings = next;

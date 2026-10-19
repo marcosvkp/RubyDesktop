@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, CircleCheck, CircleX, LoaderCircle, Terminal } from "lucide-react";
+import { ChevronRight, CircleCheck, CircleX, Download, LoaderCircle, Terminal } from "lucide-react";
 import type { ChatItem } from "../store";
 import { cn } from "../lib/utils";
 
@@ -62,6 +62,33 @@ export function ToolCallCard({ item }: { item: ToolItem }): React.JSX.Element {
         />
         <span className={cn("text-[10px] tracking-wide", statusColor)}>{statusLabel}</span>
       </button>
+
+      {item.images?.length ? (
+        <div className="space-y-3 border-t border-line p-3">
+          {item.images.map((image, index) => (
+            <figure key={`${image.mimeType}-${index}`} className="space-y-2">
+              <img
+                data-testid="generated-image-preview"
+                src={`data:${image.mimeType};base64,${image.base64}`}
+                alt={image.alt}
+                className="max-h-[440px] w-full rounded-md border border-line bg-background object-contain"
+              />
+              <figcaption className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{image.alt || `Imagem gerada ${index + 1}`}</span>
+                <a
+                  data-testid="generated-image-download"
+                  href={`data:${image.mimeType};base64,${image.base64}`}
+                  download={`ruby-generated-${index + 1}.${image.mimeType === "image/jpeg" ? "jpg" : image.mimeType.slice(6)}`}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-line px-2 py-1 text-foreground transition-colors hover:bg-white/[0.06]"
+                >
+                  <Download className="h-3 w-3" />
+                  Baixar
+                </a>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
 
       {open ? (
         <div className="border-t border-line">

@@ -27,8 +27,8 @@ const api: RubyDesktopApi = {
 
   getAgentSettings: () => ipcRenderer.invoke(IPC.invoke.getAgentSettings),
 
-  saveAgentSettings: (maxIterations) =>
-    ipcRenderer.invoke(IPC.invoke.saveAgentSettings, maxIterations),
+  saveAgentSettings: (settings) =>
+    ipcRenderer.invoke(IPC.invoke.saveAgentSettings, settings),
 
   sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),
 

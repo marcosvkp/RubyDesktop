@@ -73,6 +73,7 @@ const PHASE = {
   ADD: "add",
   TURN: "turn",
   BROKEN: "broken",
+  WAIT_READY: "wait-ready",
   DONE: "done",
 };
 
@@ -199,6 +200,22 @@ runScenario({
         return;
       }
 
+      if (
+        message.type === "status" &&
+        message.status === "ready" &&
+        state.phase === PHASE.WAIT_READY
+      ) {
+        state.phase = PHASE.BROKEN;
+        api.log(`phase ${PHASE.BROKEN}: adding a server that cannot start`);
+        api.post({
+          type: "mcp",
+          action: "add",
+          name: BAD_NAME,
+          config: fixtureServer({ MCP_FIXTURE_FAIL: "1" }),
+        });
+        return;
+      }
+
       if (message.type === "event" && message.event.type === "tool_result") {
         state.toolResults.push({ name: message.event.name, result: message.event.result });
       }
@@ -228,14 +245,8 @@ runScenario({
       }
       api.log(`output panel received ${state.metrics} metric lines`);
 
-      state.phase = PHASE.BROKEN;
-      api.log(`phase ${PHASE.BROKEN}: adding a server that cannot start`);
-      api.post({
-        type: "mcp",
-        action: "add",
-        name: BAD_NAME,
-        config: fixtureServer({ MCP_FIXTURE_FAIL: "1" }),
-      });
+      state.phase = PHASE.WAIT_READY;
+      api.log("MCP turn finished; waiting for the engine to become ready before configuration change");
     },
   },
 });

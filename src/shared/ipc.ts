@@ -18,6 +18,7 @@ import type {
   PermissionMode,
   SessionEntry,
   SessionSummary,
+  ToolImageArtifact,
 } from "@rubyclii/cli";
 
 /** Re-exported so the renderer can name agent events without importing the engine. */
@@ -27,6 +28,7 @@ export type {
   PermissionMode,
   SessionEntry,
   SessionSummary,
+  ToolImageArtifact,
 };
 
 /** A model as reported by the Ruby catalog. */
@@ -299,6 +301,8 @@ export interface RecentWorkspaceSummary {
 export interface AgentSettings {
   /** Maximum model/tool rounds for one response from the main agent. */
   maxIterations: number;
+  /** Allow image generation and editing tools to run without per-image approval. */
+  autoImageGeneration: boolean;
 }
 
 export interface GitFileChange {
@@ -568,7 +572,7 @@ export interface RubyDesktopApi {
   /** Read settings for the main agent. */
   getAgentSettings(): Promise<AgentSettings>;
   /** Save settings and restart the engine when the value changes. */
-  saveAgentSettings(maxIterations: number): Promise<{ ok: boolean; error?: string }>;
+  saveAgentSettings(settings: AgentSettings): Promise<{ ok: boolean; error?: string }>;
   /** Start a turn. Streamed output arrives via `onEngineMessage`. */
   sendPrompt(text: string): void;
   /** Activate one discovered Skill as an explicit user command. */

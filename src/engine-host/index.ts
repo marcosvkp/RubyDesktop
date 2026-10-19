@@ -44,6 +44,7 @@ import {
   decideConfirmation,
   grantKeysFor,
   ignoredProjectAllowWarning,
+  matchesDenyPattern,
   matchesNeverAutoApprove,
   loadProjectPermissions,
   saveProjectPermissions,
@@ -81,6 +82,7 @@ import type {
   SessionEntry,
   SessionLogEntry,
   SessionUiEvent,
+  ToolImageArtifact,
   SpawnSubAgentOptions,
   WorkflowAgentRequest,
   WorkflowEvent,
@@ -88,6 +90,7 @@ import type {
   UserQuestionResult,
 } from "@rubyclii/cli";
 import { BrowserBridge, registerBrowserTools } from "./browser-tools.js";
+import { configureImageTools } from "./image-tools.js";
 import { approvalGrantScope, confirmationDecision } from "@shared/approval-policy";
 import type {
   ApprovalDecision,
@@ -206,6 +209,7 @@ const pendingSubAgentReviews = new Map<
 let activeSubAgentCount = 0;
 const MAX_CONCURRENT_SUBAGENTS = 3;
 let permissionMode: PermissionMode = "normal";
+const AUTO_IMAGE_GENERATION = process.env.RUBY_DESKTOP_AUTO_IMAGE_GENERATION === "true";
 /** Set by `abort`; the run loop checks it between events. */
 let cancelled = false;
 let running = false;
@@ -2109,10 +2113,30 @@ async function buildAgent(): Promise<void> {
     "## MCP server management",
     "Use manage_mcp_servers with action=list to inspect configured servers and available tools. Use action=add only when the user asks to add a server; provide its exact name and transport configuration. The app asks the user to approve every add or remove. A new server is probed before its configuration is saved and its tools are offered on the next model call. Use ${NAME} references for credentials instead of putting secret values in chat.",
   ].join("\n");
-  const fullSystemInstruction = `${systemInstruction}\n\n${mcpGuidance}`;
+  const imageGenerationGuidance =
+    provider === "rubycli" && apiKey
+      ? [
+          "## Image generation and editing workflow",
+          "Use image_models (GET /v1/images/models) to discover the exact enabled image model IDs. Never infer them from the chat model catalog or search project files with grep/glob. Quote before image_generate with referenceCount=0; quote before image_edit with referenceCount=1. Keep model, size, quality, and n identical between quote and action. The quote is an automatic tool call, not a question to the user.",
+          AUTO_IMAGE_GENERATION
+            ? "Autonomous image mode is enabled by the user. For an unspecified model, choose the recommended/default model; if none is marked, choose the first suitable model from image_models instead of asking. After quoting, generate or edit without asking for per-image approval."
+            : "Autonomous image mode is disabled. Use the recommended/default model when available; ask only if the catalog has multiple plausible models and the choice materially affects the result. Image generation and editing still require approval.",
+          "Every image_generate and image_edit call must include save_path as a relative path inside the workspace; the tool rejects the call before contacting the generation/edit endpoint when it is missing or invalid. Use assets/generated/ and a descriptive, preferably unique filename unless the user specified a destination. The file is saved with the actual PNG/JPEG/WebP extension and existing files are never overwritten. The image is also shown in chat, but always save it to the project so it remains available outside the conversation history. image_edit accepts one PNG, JPEG, or WebP reference in image_path; use a relative project path and never read a reference outside the workspace. Its endpoint is POST /v1/images/edits and the API handles multipart boundaries. For qwen/qwen-image-2.1-turbo, use quality standard; pair 1024x1024 with resolution 1K and 2048x2048 with resolution 2K. Pass aspect_ratio when useful. If any image tool fails, report the tool error instead of ending as though it succeeded.",
+        ].join("\n")
+      : "";
+  const fullSystemInstruction = [
+    systemInstruction,
+    mcpGuidance,
+    imageGenerationGuidance,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const tools = createDefaultRegistry(model, runner, {
     spawnSubAgent,
     askUser: (question) => requestUserQuestion("main", "Ruby", question),
+    ...(provider === "rubycli" && apiKey
+      ? { imageGeneration: { apiKey, baseUrl } }
+      : {}),
     workflow: {
       runAgent: runWorkflowExplorer,
       confirmWorker: confirmWorkflowWorker,
@@ -2121,6 +2145,16 @@ async function buildAgent(): Promise<void> {
       onEvent: reportWorkflowEvent,
     },
   });
+  if (provider === "rubycli" && apiKey) {
+    configureImageTools(
+      tools,
+      process.cwd(),
+      apiKey,
+      baseUrl,
+      AUTO_IMAGE_GENERATION,
+      (toolName, args) => matchesDenyPattern(denyPatterns, toolName, args),
+    );
+  }
   const taskTool = tools.get("task");
   if (taskTool) {
     taskTool.description =
@@ -2457,6 +2491,7 @@ async function runAgentTurn(
     if (event.type === "tool_call") {
       await logSessionEntry({
         type: "tool_call",
+        ...(event.id ? { id: event.id } : {}),
         name: event.name,
         args: event.args,
         ...(event.thoughtSignature
@@ -2467,9 +2502,19 @@ async function runAgentTurn(
     if (event.type === "tool_result") {
       await logSessionEntry({
         type: "tool_result",
+        ...(event.id ? { id: event.id } : {}),
         name: event.name,
         result: event.result,
       });
+      if (event.images?.length) {
+        const images: ToolImageArtifact[] = event.images;
+        await logSessionUiEvent({
+          version: 1,
+          kind: "generated-image",
+          id: event.id ?? randomUUID(),
+          data: { toolCallId: event.id, images },
+        });
+      }
     }
     post({ type: "event", event: event as AgentEvent });
   }

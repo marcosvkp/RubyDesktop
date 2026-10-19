@@ -165,6 +165,32 @@ function writeFixtureSession() {
     content: "Você selecionou JavaScript / TypeScript e Python.",
   });
 
+  add({ type: "user", content: "Gere uma imagem de teste." });
+  add({ type: "assistant", content: "Vou gerar uma imagem pequena." });
+  add({
+    type: "tool_call",
+    id: "smoke-image-call",
+    name: "image_generate",
+    args: { model: "smoke-image-model", prompt: "Um pixel de teste" },
+  });
+  add({
+    type: "tool_result",
+    id: "smoke-image-call",
+    name: "image_generate",
+    result: "1 imagem gerada e anexada.",
+  });
+  ui("generated-image", "smoke-image-call", {
+    toolCallId: "smoke-image-call",
+    images: [
+      {
+        mimeType: "image/png",
+        base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+        alt: "Imagem de teste salva na sessão",
+      },
+    ],
+  });
+  add({ type: "assistant", content: "Imagem pronta." });
+
   fs.writeFileSync(
     SESSION_PATH,
     entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
@@ -191,7 +217,7 @@ runScenario({
         const text = (selector) => [...document.querySelectorAll(selector)].map((el) => el.innerText.trim());
         const options = [...document.querySelectorAll('[data-testid="user-question-option"]')].map((button) => ({
           label: button.querySelector('span.font-medium')?.textContent?.trim(),
-          pressed: button.getAttribute('aria-pressed'),
+          pressed: button.getAttribute('aria-checked'),
           disabled: button.disabled,
         }));
         return {
@@ -200,6 +226,9 @@ runScenario({
           agents: text('[data-testid="subagent-card"]'),
           questions: text('[data-testid="user-question-card"]'),
           options,
+          generatedImages: document.querySelectorAll('[data-testid="generated-image-preview"]').length,
+          downloads: document.querySelectorAll('[data-testid="generated-image-download"]').length,
+          imageAlt: document.querySelector('[data-testid="generated-image-preview"]')?.getAttribute('alt') ?? null,
           transcriptCount: document.querySelectorAll('[data-testid="assistant-message"]').length,
         };
       })()`);
@@ -234,6 +263,10 @@ runScenario({
         "JavaScript / TypeScript,Python,C# / .NET"
       )
         return api.finish(1, "multi-select options were not restored");
+      if (restored.generatedImages !== 1 || restored.downloads !== 1)
+        return api.finish(1, `generated image was not restored: ${JSON.stringify(restored)}`);
+      if (restored.imageAlt !== "Imagem de teste salva na sessão")
+        return api.finish(1, "restored image preview metadata is missing");
       if (
         restored.options[0].pressed !== "true" ||
         restored.options[1].pressed !== "true" ||
@@ -296,7 +329,7 @@ runScenario({
           page: card.querySelector('[data-testid="user-question-page"]')?.innerText,
           labels: options.map((button) => button.querySelector('span.font-medium')?.textContent.trim()),
           roles: options.map((button) => button.getAttribute('role')),
-          pressed: options.map((button) => button.getAttribute('aria-pressed')),
+          pressed: options.map((button) => button.getAttribute('aria-checked')),
           disabled: options.map((button) => button.disabled),
           inputValue: input?.value,
           placeholder: input?.placeholder,
@@ -328,7 +361,7 @@ runScenario({
         );
       if (
         pending.inputValue !== "" ||
-        pending.placeholder !== "Type your answer" ||
+        pending.placeholder !== "Digite sua resposta" ||
         pending.freeformToggle !== "false"
       )
         return api.finish(
@@ -352,7 +385,7 @@ runScenario({
       const selected = await api.readDom(`(() => {
         const card = [...document.querySelectorAll('[data-testid="user-question-card"]')].at(-1);
         return {
-          pressed: [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-pressed')),
+          pressed: [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-checked')),
           inputValue: card.querySelector('[data-testid="user-question-freeform"]').value,
           nextDisabled: card.querySelector('[data-testid="user-question-next"]').disabled,
         };
@@ -398,7 +431,7 @@ runScenario({
       await new Promise((resolve) => setTimeout(resolve, 40));
       const radioSelected = await api.readDom(`(() => {
         const card = [...document.querySelectorAll('[data-testid="user-question-card"]')].at(-1);
-        return [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-pressed'));
+        return [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-checked'));
       })()`);
       if (radioSelected.join(",") !== "true,false")
         return api.finish(
@@ -413,7 +446,7 @@ runScenario({
       await new Promise((resolve) => setTimeout(resolve, 40));
       const previousRetained = await api.readDom(`(() => {
         const card = [...document.querySelectorAll('[data-testid="user-question-card"]')].at(-1);
-        return [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-pressed'));
+        return [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-checked'));
       })()`);
       if (previousRetained.join(",") !== "true,true,false")
         return api.finish(
@@ -452,7 +485,7 @@ runScenario({
       const customReady = await api.readDom(`(() => {
         const card = [...document.querySelectorAll('[data-testid="user-question-card"]')].at(-1);
         return {
-          selected: [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-pressed')),
+          selected: [...card.querySelectorAll('[data-testid="user-question-option"]')].map((button) => button.getAttribute('aria-checked')),
           inputValue: card.querySelector('[data-testid="user-question-freeform"]').value,
           customIncluded: card.querySelector('[data-testid="user-question-freeform-toggle"]').getAttribute('aria-checked'),
           submitDisabled: card.querySelector('[data-testid="user-question-next"]').disabled,
@@ -478,7 +511,7 @@ runScenario({
           pageCount: pages.length,
           pageOptions: pages.map((page) => [...page.querySelectorAll('[data-testid="user-question-option"]')].map((button) => ({
             label: button.querySelector('span.font-medium')?.textContent.trim(),
-            pressed: button.getAttribute('aria-pressed'),
+            pressed: button.getAttribute('aria-checked'),
             disabled: button.disabled,
           }))),
           customAnswer: pages[2]?.querySelector('[data-testid="user-question-freeform-answer"]')?.textContent.trim(),

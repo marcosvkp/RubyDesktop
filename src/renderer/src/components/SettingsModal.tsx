@@ -10,6 +10,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [maxIterations, setMaxIterations] = useState("50");
+  const [autoImageGeneration, setAutoImageGeneration] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -21,7 +22,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
     };
     window.addEventListener("keydown", onKeyDown);
     void window.ruby.getAgentSettings().then((settings) => {
-      if (mounted) setMaxIterations(String(settings.maxIterations));
+      if (mounted) {
+        setMaxIterations(String(settings.maxIterations));
+        setAutoImageGeneration(settings.autoImageGeneration);
+      }
     }).catch(() => {
       if (mounted) setSettingsError("Não foi possível carregar as configurações do agente.");
     });
@@ -64,14 +68,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
     setSettingsError("");
     setSettingsSaved(false);
     try {
-      const result = await window.ruby.saveAgentSettings(parsed);
+      const result = await window.ruby.saveAgentSettings({
+        maxIterations: parsed,
+        autoImageGeneration,
+      });
       if (!result.ok) {
-        setSettingsError(result.error ?? "Não foi possível salvar o limite.");
+        setSettingsError(result.error ?? "Não foi possível salvar as configurações.");
         return;
       }
       setSettingsSaved(true);
     } catch (err) {
-      setSettingsError(err instanceof Error ? err.message : "Não foi possível salvar o limite.");
+      setSettingsError(err instanceof Error ? err.message : "Não foi possível salvar as configurações.");
     } finally {
       setSavingSettings(false);
     }
@@ -126,7 +133,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
 
           <section className="space-y-3 border-t border-line pt-4" aria-labelledby="agent-limit-title">
             <div>
-              <h3 id="agent-limit-title" className="text-xs font-semibold">Limite do agente principal</h3>
+              <h3 id="agent-limit-title" className="text-xs font-semibold">Agente e geração de imagens</h3>
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                 Rodadas do modelo que pedem ferramentas por resposta. O padrão é 50; aumentar permite tarefas mais longas e pode elevar o tempo e o uso de tokens. Subagentes têm limite próprio.
               </p>
@@ -154,11 +161,29 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
                 disabled={busy || compacting || savingSettings}
                 className="ml-auto rounded-md border border-line bg-page px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-white/5 disabled:opacity-40"
               >
-                {savingSettings ? "Aplicando…" : "Salvar limite"}
+                {savingSettings ? "Aplicando…" : "Salvar configurações"}
               </button>
             </div>
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-line bg-page px-3 py-2.5">
+              <input
+                type="checkbox"
+                checked={autoImageGeneration}
+                onChange={(event) => {
+                  setAutoImageGeneration(event.target.checked);
+                  setSettingsSaved(false);
+                  setSettingsError("");
+                }}
+                className="mt-0.5 accent-primary"
+              />
+              <span className="space-y-1">
+                <span className="block text-xs font-medium text-foreground">Gerar e editar imagens sem pedir aprovação a cada vez</span>
+                <span className="block text-[11px] leading-relaxed text-muted-foreground">
+                  Ativado: o agente ainda consulta a estimativa de RU, mas pode gerar ou editar sem confirmação por imagem. Isso pode consumir créditos automaticamente.
+                </span>
+              </span>
+            </label>
             {settingsError ? <p role="alert" className="text-xs text-destructive">{settingsError}</p> : null}
-            {settingsSaved ? <p role="status" className="text-xs text-emerald-400">Limite salvo. O agente foi reiniciado com a nova configuração.</p> : null}
+            {settingsSaved ? <p role="status" className="text-xs text-emerald-400">Configurações salvas. O agente foi reiniciado com os novos valores.</p> : null}
             {(busy || compacting) ? <p className="text-[11px] text-muted-foreground">Finalize o turno atual para alterar o limite.</p> : null}
           </section>
         </div>

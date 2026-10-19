@@ -32,6 +32,7 @@ import type {
   SubAgentSummary,
   UserQuestionAnswer,
   UserQuestionRequest,
+  ToolImageArtifact,
 } from "@shared/ipc";
 import { isKnownSlashCommand } from "./slash-commands";
 
@@ -51,6 +52,7 @@ export type ChatItem =
       name: string;
       args: unknown;
       result?: string;
+      images?: ToolImageArtifact[];
       status: "running" | "ok" | "error" | "denied";
     }
   | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
@@ -375,6 +377,33 @@ function notice(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+const MAX_IMAGE_BASE64_CHARS = 16_777_216;
+const MAX_IMAGE_SET_BASE64_CHARS = 44_739_244;
+const BASE64_IMAGE_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function parseToolImages(value: unknown): ToolImageArtifact[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return undefined;
+  let totalChars = 0;
+  const images: ToolImageArtifact[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      !["image/png", "image/jpeg", "image/webp"].includes(String(entry.mimeType)) ||
+      typeof entry.base64 !== "string" ||
+      entry.base64.length === 0 ||
+      entry.base64.length > MAX_IMAGE_BASE64_CHARS ||
+      !BASE64_IMAGE_PATTERN.test(entry.base64) ||
+      typeof entry.alt !== "string" ||
+      entry.alt.length > 200
+    )
+      return undefined;
+    totalChars += entry.base64.length;
+    if (totalChars > MAX_IMAGE_SET_BASE64_CHARS) return undefined;
+    images.push(entry as unknown as ToolImageArtifact);
+  }
+  return images;
 }
 
 function isQuestionAnswer(value: unknown): value is UserQuestionAnswer {
@@ -776,6 +805,30 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
           status,
           ...(answers ? { answers } : {}),
         });
+      } else if (kind === "generated-image") {
+        const images = parseToolImages(data.images);
+        if (!images) continue;
+        const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : undefined;
+        let index = toolCallId
+          ? items.findIndex(
+              (item) => item.kind === "tool" && item.callId === toolCallId,
+            )
+          : -1;
+        if (index < 0) {
+          for (let i = items.length - 1; i >= 0; i--) {
+            const item = items[i];
+            if (
+              item?.kind === "tool" &&
+              (item.name === "image_generate" || item.name === "image_edit") &&
+              !item.images
+            ) {
+              index = i;
+              break;
+            }
+          }
+        }
+        const item = index >= 0 ? items[index] : undefined;
+        if (item?.kind === "tool") items[index] = { ...item, images };
       }
     }
   }
@@ -1429,6 +1482,7 @@ export const useStore = create<State>((set, get) => ({
           case "tool_result":
             if (event.name === "think" || event.name === "report_progress") return;
             if (event.name === "todo_write" || event.name === "todo_read") return;
+            const images = parseToolImages(event.images);
             set((s) => {
               // Provider IDs pair results with their exact call; retain the name/FIFO
               // fallback for older engines that do not emit IDs.
@@ -1445,6 +1499,7 @@ export const useStore = create<State>((set, get) => ({
                   items[i] = {
                     ...item,
                     result: truncateToolResult(event.result),
+                    ...(images ? { images } : {}),
                     status: event.result.startsWith("Blocked:")
                       ? "denied"
                       : event.result.startsWith("Error:")
