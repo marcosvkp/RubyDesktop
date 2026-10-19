@@ -7,8 +7,12 @@
 > Para convenções de código, ver [`AGENTS.md`](AGENTS.md).
 
 **Estado:** M0–M6, M3.5–M3.7, M4.1–M4.4 e M8 (Skills de modding Minecraft) estão implementados.
+`v0.1.8` foi publicada em 2026-10-19 com M7.2: geração/edição de imagens, prévia no chat e salvamento
+obrigatório no projeto via `save_path`. Fixa o RubyCLI em
+`e7fbd81d2bb0bd58c1305438e4b208bcd46563cf` e inclui 17 artefatos Windows, Linux e macOS. A CI
+`39300373579` e a release `39300378171` passaram nos três sistemas.
 `v0.1.7` foi publicada em 2026-10-18 com o painel local de Git/worktrees, melhorias no painel MCP e
-execução paralela consultável dos subagentes. Fixa o RubyCLI em
+execução paralela consultável dos subagentes. Ela fixa o RubyCLI em
 `3af15adcd0a78cb37b459f0947a7dcc4d47c9723` e inclui 17 artefatos Windows, Linux e macOS. A CI
 `39093051445` e a release `39093055854` passaram nos três sistemas.
 A hardening pass de `FIX.md` também foi implementada no Desktop. A release histórica `v0.1.6` fixa o
@@ -16,15 +20,13 @@ RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutida
 em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
 e persistente, além da lista de tarefas do agente no chat. O agente principal tem limite de ciclos
 configurável de 1 a 500 (padrão 50). Windows/macOS permanecem sem assinatura; Linux inclui o feed de
-atualização. M7.2 (cotação, geração, edição por caminho de projeto e gravação de imagens pelo provider
-Ruby) está implementado localmente, ainda sem release; anexos de entrada e hardening/restauração
-abrangente de M7 continuam pendentes. O suporte de imagem da engine foi publicado no RubyCLI em
-`e7fbd81d2bb0bd58c1305438e4b208bcd46563cf`; o Desktop agora fixa esse commit para os builds e não
-depende da publicação no npm.
+atualização. A próxima etapa de M7 é anexar imagens de entrada ao chat e ampliar os smokes de
+hardening/restauração. O suporte de imagem da engine está publicado no RubyCLI e o Desktop fixa seu
+commit diretamente, sem depender da publicação no npm.
 
 ### Verificação atual — 2026-10-19
 
-- M7.2 local: RubyCLI oferece `image_models` (`GET /v1/images/models`), `image_quote`
+- M7.2: RubyCLI oferece `image_models` (`GET /v1/images/models`), `image_quote`
   (`POST /v1/images/quote`) e `image_generate` (`POST /v1/images/generations`); o Desktop adiciona
   `image_edit` (`POST /v1/images/edits`) com uma referência dentro do projeto. As ferramentas exigem
   cotação recente e idêntica em modelo, tamanho, qualidade, quantidade e número de referências. A
@@ -44,16 +46,15 @@ depende da publicação no npm.
 - A cotação envia `referenceCount: 0`, e o parser aceita os campos de créditos aninhados e como número
   ou string. A geração aceita `resolution` e `aspect_ratio`, lê `media_type` no item ou na resposta e exibe
   `usage.credits` quando a API retorna esse dado.
-- A correção de cotação foi compilada nos dois repositórios e passou em 67 testes focados. A API não
-  foi chamada ao vivo e os seis smoke scripts Desktop não foram repetidos nesta revisão.
-- RubyDesktop `npm run build` passou. Os seis smoke scripts Electron passaram: `smoke-main`,
-  `smoke-permissions` (em home/workspace temporários isolados), `smoke-mcp`, `smoke-browser`,
-  `smoke-markdown` e `smoke-session-history`. Os smoke harnesses foram alinhados à restauração
-  assíncrona da sessão, aos controles atuais de perguntas e às abas globais do painel lateral.
-- RubyCLI: build, typecheck, ESLint, Prettier e os 67 testes focados de imagem/executor/agente passaram.
-  Na suíte completa, 1169 testes passaram e 70 foram ignorados; falharam 21 cenários live de avaliação
-  com exit `3221226505` no Windows e um teste de compactação aninhada excedeu 5s. Essas falhas são do
-  ambiente/matriz existente e não dos testes determinísticos da nova tool.
+- A API de imagens não foi chamada ao vivo durante a validação. `save_path` obrigatório foi validado
+  por schema e execução: geração/edição sem destino ou com caminho inválido falham antes da chamada
+  que gera ou edita; arquivos existentes não são sobrescritos.
+- Desktop CI `39300373579` e release `39300378171` passaram. Os três pacotes foram verificados e os
+  17 assets Windows, Linux e macOS foram publicados em
+  https://github.com/marcosvkp/RubyDesktop/releases/tag/v0.1.8.
+- RubyCLI `e7fbd81`: build, typecheck, ESLint, Prettier e 1171 testes passaram; 70 foram ignorados.
+  O hook de push também executou 21 avaliações live que falharam com exit `3221226505` no Windows;
+  o CI de Desktop passou com o pin publicado.
 
 - RubyDesktop `v0.1.7`: release publicada em
   https://github.com/marcosvkp/RubyDesktop/releases/tag/v0.1.7 com 17 assets Windows, Linux e macOS.
@@ -314,7 +315,7 @@ o provider. Builds locais sem publicação também continuam possíveis sem cert
 - Verificação local desta implementação: `npm run typecheck` e `npm run build` passaram. Os smoke
   scripts não foram executados nesta rodada.
 
-### M7 parcial — Geração, edição e gravação de imagens; anexos de entrada pendentes
+### M7 — Geração, edição e gravação de imagens; anexos de entrada pendentes
 
 O composer atual envia texto. O indicador `supportsVision` do catálogo só descreve capacidade do
 modelo; ele não significa que o Desktop envie imagens anexadas pelo usuário. A tool `browser_screenshot`
@@ -324,7 +325,7 @@ geração, edição por caminho local e gravação opcional no workspace via Rub
 - **M7.1 — Anexos de entrada (pendente):** escolher imagem, colar da área de transferência ou arrastar e soltar;
   mostrar prévia e permitir remoção antes do envio. Validar MIME e tamanho no processo principal e
   transportar bytes/referências pelo IPC sem dar acesso geral ao filesystem ao renderer.
-- **M7.2 — Tools de imagem (implementadas localmente):** RubyCLI exporta `createImageTools` e o Desktop
+- **M7.2 — Tools de imagem (publicadas na v0.1.8):** RubyCLI exporta `createImageTools` e o Desktop
   registra as tools somente com provider Ruby e chave configurada. `image_models` consulta
   `GET /v1/images/models`; `image_quote` usa
   `POST /v1/images/quote`; `image_generate` chama `POST /v1/images/generations`; e `image_edit`

@@ -3,7 +3,7 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.7` multiplataforma publicada · M8 implementado · M7.2 imagens implementado localmente · M7.1/M7.3 pendentes**
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.8` multiplataforma publicada · M8 implementado · M7.2 imagens entregue · M7.1/M7.3 pendentes**
 Data: 2026-10-19
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
@@ -24,6 +24,10 @@ subagentes agora executam em segundo plano, com consulta por ID e restauração 
 `npm run build` passou; CI `39093051445` e release `39093055854` passaram nos três sistemas. A release
 foi publicada com 17 assets para Windows, Linux e macOS. Os instaladores Windows/macOS são unsigned,
 portanto o sistema pode exibir avisos e atualizações automáticas dessas plataformas não estão ativas.
+**`v0.1.8` — 2026-10-19:** geração e edição de imagens via API Ruby, prévia no chat e `save_path`
+obrigatório que persiste cada resultado no projeto. RubyCLI pinado em
+`e7fbd81d2bb0bd58c1305438e4b208bcd46563cf`. CI `39300373579` e release `39300378171` passaram em
+Windows, Linux e macOS, com 17 assets publicados. Windows/macOS seguem sem assinatura.
 Historicamente, a `v0.1.3` foi publicada com 19 artefatos. Na validação local daquela rodada,
 `smoke-markdown`, `smoke-session-history` e `smoke-browser` passaram; `smoke-main` recebeu HTTP 502
 do provider, `smoke-permissions` não completou uma segunda chamada ao provider e `smoke-mcp` não foi
@@ -929,13 +933,12 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 
 ## 10. Próximo passo
 
-M0–M6 foram entregues e `v0.1.7` é a release mais recente. M8 está no RubyCLI e no Desktop. M7.2
-(cotação, geração, edição por arquivo do workspace, gravação de assets e prévia inline de imagens) está
-implementado no Desktop `v0.1.8` em preparação, fixado à engine RubyCLI `e7fbd81d`. O próximo marco é
-M7.1: anexar imagens de entrada, persistir
-referências locais e enviar payload multimodal somente a modelos que anunciam `supportsVision`. Depois,
-adicionar smokes para edição, salvamento e autonomia, e aproveitar mais metadados do catálogo específico
-de modelos de geração.
+M0–M6 foram entregues e `v0.1.8` é a release mais recente. M8 está no RubyCLI e no Desktop. M7.2
+(cotação, geração, edição por arquivo do workspace, gravação obrigatória de assets e prévia inline de
+imagens) foi publicada com a engine RubyCLI `e7fbd81d`. O próximo marco é M7.1: anexar imagens de
+entrada, persistir referências locais e enviar payload multimodal somente a modelos que anunciam
+`supportsVision`. Depois, adicionar smokes para edição, salvamento e autonomia, e aproveitar mais
+metadados do catálogo específico de modelos de geração.
 
 Em paralelo, permanecem tarefas operacionais: repetir a matriz live com uma chave válida e provider
 disponível; validar os instaladores em Windows, macOS e Linux; e configurar assinatura se for
