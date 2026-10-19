@@ -931,7 +931,8 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 
 M0–M6 foram entregues e `v0.1.7` é a release mais recente. M8 está no RubyCLI e no Desktop. M7.2
 (cotação, geração, edição por arquivo do workspace, gravação de assets e prévia inline de imagens) está
-implementado localmente, sem release. O próximo marco é M7.1: anexar imagens de entrada, persistir
+implementado no Desktop `v0.1.8` em preparação, fixado à engine RubyCLI `e7fbd81d`. O próximo marco é
+M7.1: anexar imagens de entrada, persistir
 referências locais e enviar payload multimodal somente a modelos que anunciam `supportsVision`. Depois,
 adicionar smokes para edição, salvamento e autonomia, e aproveitar mais metadados do catálogo específico
 de modelos de geração.

@@ -18,8 +18,9 @@ e persistente, além da lista de tarefas do agente no chat. O agente principal t
 configurável de 1 a 500 (padrão 50). Windows/macOS permanecem sem assinatura; Linux inclui o feed de
 atualização. M7.2 (cotação, geração, edição por caminho de projeto e gravação de imagens pelo provider
 Ruby) está implementado localmente, ainda sem release; anexos de entrada e hardening/restauração
-abrangente de M7 continuam pendentes. O workflow
-compila a engine do repositório próprio no GitHub, sem depender da publicação no npm.
+abrangente de M7 continuam pendentes. O suporte de imagem da engine foi publicado no RubyCLI em
+`e7fbd81d2bb0bd58c1305438e4b208bcd46563cf`; o Desktop agora fixa esse commit para os builds e não
+depende da publicação no npm.
 
 ### Verificação atual — 2026-10-19
 
