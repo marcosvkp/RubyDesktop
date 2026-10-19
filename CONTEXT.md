@@ -320,7 +320,7 @@ o provider. Builds locais sem publicação também continuam possíveis sem cert
 O composer atual envia texto. O indicador `supportsVision` do catálogo só descreve capacidade do
 modelo; ele não significa que o Desktop envie imagens anexadas pelo usuário. A tool `browser_screenshot`
 salva PNG na pasta de dados do app e retorna texto, sem anexar a imagem à conversa. M7.2 adiciona
-geração, edição por caminho local e gravação opcional no workspace via Ruby API.
+geração, edição por caminho local e gravação obrigatória no workspace via Ruby API.
 
 - **M7.1 — Anexos de entrada (pendente):** escolher imagem, colar da área de transferência ou arrastar e soltar;
   mostrar prévia e permitir remoção antes do envio. Validar MIME e tamanho no processo principal e
