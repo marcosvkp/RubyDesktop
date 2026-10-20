@@ -706,7 +706,7 @@ cd G:\VSCodeProjects\RubyDesktop ; npm run dist
 npm run package:dir
 ```
 
-O GitHub Actions lê o repositório e o SHA completo do engine diretamente de `ruby-engine.lock.json`;
+CI e release leem o repositório e o SHA completo do engine diretamente de `ruby-engine.lock.json`;
 não é necessária uma Actions variable `RUBYCLI_REF`. A tag de release precisa ser
 `v<package.json.version>`; a próxima é `v0.1.9`.
 

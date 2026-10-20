@@ -104,8 +104,8 @@ depender da publicação no npm.
 - A release aceita builds unsigned de Windows/macOS, emite aviso e omite os feeds dessas plataformas;
   quando os certificados estão configurados, valida assinatura/notarização e os feeds. Linux mantém
   seu feed. O coletor limpa o staging e só inclui assets da versão atual.
-- O workflow de release lê o repositório e o SHA imutável diretamente de `ruby-engine.lock.json`,
-  então não depende de uma Actions variable manual `RUBYCLI_REF`.
+- CI e release leem o repositório e o SHA imutável diretamente de `ruby-engine.lock.json`,
+  então não dependem de uma Actions variable manual `RUBYCLI_REF`.
 - A blocklist catastrófica também é aplicada em `decideConfirmation` no RubyCLI; grants `bash:*`
   e grants exatos não liberam comandos catastróficos. Confirmação manual permite só uma execução.
 - `tool_call` e `tool_result` agora podem carregar IDs do provider. O Desktop usa esses IDs para
@@ -294,7 +294,7 @@ cd G:\VSCodeProjects\RubyDesktop ; npm run dist
 npm run package:dir
 ```
 
-O workflow lê o repositório e o SHA completo da engine em `ruby-engine.lock.json`; não é preciso
+CI e release leem o repositório e o SHA completo da engine em `ruby-engine.lock.json`; não é preciso
 configurar `RUBYCLI_REF` manualmente. A engine deve estar commitada e enviada ao seu próprio
 repositório; a CI não espera publicação no npm. A tag deve corresponder a `package.json` (por exemplo,
 `v0.1.9`).
