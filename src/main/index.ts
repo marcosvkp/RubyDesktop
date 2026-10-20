@@ -16,6 +16,7 @@ import {
   utilityProcess,
 } from "electron";
 import { autoUpdater } from "electron-updater";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -33,6 +34,8 @@ import type {
   GrantKeyKind,
   GoalStatus,
   AgentSettings,
+  ChatImageAttachment,
+  ChatImageMimeType,
   McpServerDraft,
   ModelSummary,
   PermissionMode,
@@ -770,6 +773,91 @@ function createWindow(): void {
 
 ipcMain.handle(IPC.invoke.getWorkspace, () => workspace);
 ipcMain.handle(IPC.invoke.getRecentWorkspaces, () => recentWorkspaces);
+const CHAT_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const CHAT_IMAGE_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+const CHAT_IMAGE_MAX_COUNT = 4;
+
+function detectChatImageMime(bytes: Buffer): ChatImageMimeType | undefined {
+  if (
+    bytes.length >= 8 &&
+    bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  if (
+    bytes.length >= 12 &&
+    bytes.toString("ascii", 0, 4) === "RIFF" &&
+    bytes.toString("ascii", 8, 12) === "WEBP"
+  ) return "image/webp";
+  return undefined;
+}
+
+function validateChatImages(value: unknown): ChatImageAttachment[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > CHAT_IMAGE_MAX_COUNT) {
+    throw new Error(`Anexe entre 1 e ${CHAT_IMAGE_MAX_COUNT} imagens por mensagem.`);
+  }
+  let totalBytes = 0;
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object") throw new Error("Anexo de imagem inválido.");
+    const candidate = item as Partial<ChatImageAttachment>;
+    if (
+      typeof candidate.base64 !== "string" ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(candidate.base64)
+    ) throw new Error("O conteúdo de uma imagem anexada está inválido.");
+    const bytes = Buffer.from(candidate.base64, "base64");
+    if (!bytes.length || bytes.length > CHAT_IMAGE_MAX_BYTES) {
+      throw new Error("Cada imagem deve ter no máximo 8 MB.");
+    }
+    totalBytes += bytes.length;
+    if (totalBytes > CHAT_IMAGE_MAX_TOTAL_BYTES) {
+      throw new Error("O total de imagens por mensagem deve ser de até 16 MB.");
+    }
+    const actualMime = detectChatImageMime(bytes);
+    if (!actualMime || candidate.mimeType !== actualMime) {
+      throw new Error("Formato de imagem inválido. Use PNG, JPEG ou WebP.");
+    }
+    const name = typeof candidate.name === "string" ? basename(candidate.name).slice(0, 120) : "";
+    return {
+      id: typeof candidate.id === "string" && /^[\w-]{1,80}$/.test(candidate.id)
+        ? candidate.id
+        : `image-${index + 1}`,
+      name: name || `imagem-${index + 1}.${actualMime === "image/jpeg" ? "jpg" : actualMime.slice(6)}`,
+      mimeType: actualMime,
+      base64: candidate.base64,
+    };
+  });
+}
+
+ipcMain.handle(IPC.invoke.pickChatImages, async () => {
+  const options: Electron.OpenDialogOptions = {
+    title: "Adicionar imagens à mensagem",
+    buttonLabel: "Anexar imagens",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "Imagens", extensions: ["png", "jpg", "jpeg", "webp"] }],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled) return [];
+  if (result.filePaths.length > CHAT_IMAGE_MAX_COUNT) {
+    throw new Error(`É possível anexar até ${CHAT_IMAGE_MAX_COUNT} imagens por mensagem.`);
+  }
+  const images = await Promise.all(result.filePaths.map(async (path) => {
+    if (statSync(path).size > CHAT_IMAGE_MAX_BYTES) {
+      throw new Error(`Cada imagem deve ter no máximo 8 MB ('${basename(path)}').`);
+    }
+    const bytes = await readFile(path);
+    const mimeType = detectChatImageMime(bytes);
+    if (!mimeType) throw new Error(`'${basename(path)}' não é PNG, JPEG ou WebP válido.`);
+    return {
+      id: randomUUID(),
+      name: basename(path),
+      mimeType,
+      base64: bytes.toString("base64"),
+    } satisfies ChatImageAttachment;
+  }));
+  return validateChatImages(images);
+});
 ipcMain.handle(IPC.invoke.gitOperation, async (_event, request: unknown) =>
   runGitOperation(workspace, request, {
     chooseWorktreeParent: async () => {
@@ -884,9 +972,21 @@ ipcMain.handle(
   },
 );
 
-ipcMain.on(IPC.send.prompt, (_event, text: string) =>
-  post({ type: "prompt", text }),
-);
+ipcMain.on(IPC.send.prompt, (_event, text: unknown, rawImages?: unknown) => {
+  if (typeof text !== "string" || text.length > 100_000) {
+    sendToRenderer({ type: "error", message: "A mensagem excede o limite permitido." });
+    return;
+  }
+  try {
+    const images = rawImages === undefined ? undefined : validateChatImages(rawImages);
+    post({ type: "prompt", text, ...(images ? { images } : {}) });
+  } catch (error) {
+    sendToRenderer({
+      type: "error",
+      message: error instanceof Error ? error.message : "Não foi possível validar as imagens.",
+    });
+  }
+});
 ipcMain.on(IPC.send.activateSkill, (_event, name: string, args: string) =>
   post({ type: "activateSkill", name, args }),
 );

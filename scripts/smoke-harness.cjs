@@ -297,6 +297,7 @@ function runScenario({
       error: "Unavailable in smoke harness.",
     }));
     registerInvoke(IPC.invoke.pickWorkspace, () => undefined);
+    registerInvoke(IPC.invoke.pickChatImages, () => []);
     registerInvoke(IPC.invoke.saveApiKey, async () => ({
       ok: false,
       error: "Unavailable in smoke harness.",

@@ -41,6 +41,18 @@ export interface ModelSummary {
   supportsVision?: boolean;
 }
 
+export type ChatImageMimeType = "image/png" | "image/jpeg" | "image/webp";
+
+/** User-selected image carried through the host IPC to the engine. */
+export interface ChatImageAttachment {
+  id: string;
+  name: string;
+  mimeType: ChatImageMimeType;
+  base64: string;
+  /** Relative path of the session-scoped copy written inside the workspace. */
+  workspacePath?: string;
+}
+
 /** Values accepted by OpenAI-compatible reasoning endpoints. */
 export type ReasoningEffort =
   | "none"
@@ -392,7 +404,7 @@ export type MetricLine = MetricLinePayload & { agentId?: string };
 /** Messages sent from the main process to the engine host. */
 export type EngineRequest =
   | { type: "hello" }
-  | { type: "prompt"; text: string }
+  | { type: "prompt"; text: string; images?: ChatImageAttachment[] }
   | { type: "activateSkill"; name: string; args: string }
   | { type: "abort" }
   | { type: "setModel"; model: string; reasoningEffort?: ReasoningEffort }
@@ -573,8 +585,10 @@ export interface RubyDesktopApi {
   getAgentSettings(): Promise<AgentSettings>;
   /** Save settings and restart the engine when the value changes. */
   saveAgentSettings(settings: AgentSettings): Promise<{ ok: boolean; error?: string }>;
+  /** Open a native image picker and return validated image attachments. */
+  pickChatImages(): Promise<ChatImageAttachment[]>;
   /** Start a turn. Streamed output arrives via `onEngineMessage`. */
-  sendPrompt(text: string): void;
+  sendPrompt(text: string, images?: ChatImageAttachment[]): void;
   /** Activate one discovered Skill as an explicit user command. */
   activateSkill(name: string, args: string): void;
   /** Cancel the in-flight turn. */

@@ -3,8 +3,8 @@
 > App desktop de agentes de código, estilo DeepSeek Harness, conectado ao provider Ruby.
 > Base: **`marcosvkp/rubycli`** (MIT, TypeScript) — engine que já existe e já é seu.
 
-Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.8` multiplataforma publicada · M8 implementado · M7.2 imagens entregue · M7.1/M7.3 pendentes**
-Data: 2026-10-19
+Status: **M0–M6 ✅ · M3.5–M3.7 UX ✅ · M4.1–M4.4 ✅ · M6.1 Git/worktrees ✅ · `v0.1.8` publicada · `v0.1.9` M7.1 em publicação multiplataforma · M8 implementado · M7.2 publicado · M7.3 validação pendente**
+Data: 2026-10-20
 Workspace: `G:\VSCodeProjects\RubyDesktop`
 Repos: `RubyDesktop` (este) + `RubyCLI` (engine, local em `G:\VSCodeProjects\RubyCLI`)
 
@@ -28,6 +28,10 @@ portanto o sistema pode exibir avisos e atualizações automáticas dessas plata
 obrigatório que persiste cada resultado no projeto. RubyCLI pinado em
 `e7fbd81d2bb0bd58c1305438e4b208bcd46563cf`. CI `39300373579` e release `39300378171` passaram em
 Windows, Linux e macOS, com 17 assets publicados. Windows/macOS seguem sem assinatura.
+**`v0.1.9` — 2026-10-20 (publicação em andamento):** seleção e colagem de imagens no composer,
+prévia inline, persistência local por sessão e envio multimodal via adapters RubyCLI. RubyCLI pinado em
+`002098dab21e6540da4068d86dbd41e939efe928`. Os builds locais dos dois repositórios passaram; ainda
+faltam os resultados do workflow multiplataforma e a validação ao vivo com provider de visão.
 Historicamente, a `v0.1.3` foi publicada com 19 artefatos. Na validação local daquela rodada,
 `smoke-markdown`, `smoke-session-history` e `smoke-browser` passaram; `smoke-main` recebeu HTTP 502
 do provider, `smoke-permissions` não completou uma segunda chamada ao provider e `smoke-mcp` não foi
@@ -702,11 +706,9 @@ cd G:\VSCodeProjects\RubyDesktop ; npm run dist
 npm run package:dir
 ```
 
-O GitHub Actions clona `marcosvkp/rubycli` por padrão. Configure a Actions variable obrigatória
-`RUBYCLI_REF` com o SHA completo de 40 caracteres do engine; `RUBYCLI_REPOSITORY` pode trocar o
-repositório. A revisão é verificada contra `ruby-engine.lock.json`. A tag de release precisa ser
-`v<package.json.version>`;
-`v0.1.6` corresponde à versão publicada atual.
+O GitHub Actions lê o repositório e o SHA completo do engine diretamente de `ruby-engine.lock.json`;
+não é necessária uma Actions variable `RUBYCLI_REF`. A tag de release precisa ser
+`v<package.json.version>`; a próxima é `v0.1.9`.
 
 O workflow permite publicar instaladores Windows/macOS sem certificados; o sistema pode exibir
 avisos e o app abre a página de downloads quando há uma nova versão. Com os segredos de assinatura
@@ -788,17 +790,17 @@ O composer atualmente transmite texto puro. O campo `supportsVision` do catálog
 modelos capazes de receber imagens; o Desktop ainda não envia imagens de entrada. A geração via API
 Ruby foi implementada em M7.2, sem inferir capacidade de geração a partir de `supportsVision`.
 
-#### M7.1 — Anexar imagens ao chat
+#### M7.1 — Anexar imagens ao chat ✅ candidato v0.1.9
 
-- Adicionar seleção de arquivos, colagem e drag-and-drop, com prévia, remoção e estados de envio.
-- Validar tipo, tamanho e quantidade no processo principal; aceitar apenas formatos compatíveis com
-  o provider e evitar que o renderer receba acesso irrestrito a caminhos locais.
-- Expandir contrato IPC e input do engine para transportar texto mais imagens em payload
-  multimodal estruturado; não embutir dados binários/base64 no texto do prompt.
-- Respeitar a capacidade do modelo selecionado: habilitar envio apenas para modelos de visão e
-  explicar quando o modelo atual não aceitar anexos.
-- Guardar anexos em armazenamento controlado pelo app e registrar referências estáveis no histórico;
-  reabrir a sessão deve manter prévia e acesso às imagens.
+- ✅ Selecionar imagens e colar com Ctrl+V; mostrar prévia, permitir remoção e sinalizar envio. Drag-and-drop
+  segue como melhoria opcional.
+- ✅ Validar tipo, assinatura, tamanho e quantidade no processo principal sem dar acesso irrestrito a arquivos
+  ao renderer.
+- ✅ Transportar texto e imagens em payload multimodal estruturado por IPC e pelos adapters OpenAI-compatible,
+  Anthropic e Gemini, sem inserir base64 no texto do prompt.
+- ✅ Salvar cópia local por sessão em `.rubycli/tmp/<session>/chat-images/`; registrar dados no JSONL e
+  restaurar prévia e caminho ao reabrir a conversa.
+- ⏳ Validar o fluxo ao vivo com um provider/modelo de visão e adicionar smokes de anexos/restauração.
 
 #### M7.2 — Tools de geração e edição de imagens ✅ local
 
@@ -933,11 +935,12 @@ skill entra no catálogo automático e no autocomplete de slash commands já exi
 
 ## 10. Próximo passo
 
-M0–M6 foram entregues e `v0.1.8` é a release mais recente. M8 está no RubyCLI e no Desktop. M7.2
+M0–M6 foram entregues e `v0.1.8` é a release publicada mais recente, com `v0.1.9` em publicação.
+M8 está no RubyCLI e no Desktop. M7.2
 (cotação, geração, edição por arquivo do workspace, gravação obrigatória de assets e prévia inline de
-imagens) foi publicada com a engine RubyCLI `e7fbd81d`. O próximo marco é M7.1: anexar imagens de
-entrada, persistir referências locais e enviar payload multimodal somente a modelos que anunciam
-`supportsVision`. Depois, adicionar smokes para edição, salvamento e autonomia, e aproveitar mais
+imagens) foi publicada com a engine RubyCLI `e7fbd81d`. M7.1 adiciona anexos de entrada, persistência
+por sessão e payload multimodal nos adapters suportados. O próximo marco é M7.3: adicionar smokes para
+anexos/restauração, edição, salvamento e autonomia; validar com provider de visão; e aproveitar mais
 metadados do catálogo específico de modelos de geração.
 
 Em paralelo, permanecem tarefas operacionais: repetir a matriz live com uma chave válida e provider

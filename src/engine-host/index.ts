@@ -19,6 +19,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   Agent,
   createClient,
@@ -111,6 +113,7 @@ import type {
   SubAgentTranscriptEntry,
   UserQuestionAnswer,
   UserQuestionRequest,
+  ChatImageAttachment,
 } from "@shared/ipc";
 import { WorktreeManager } from "./worktrees.js";
 
@@ -2466,19 +2469,39 @@ async function runAgentTurn(
   text: string,
   sessionText: string,
   signal?: AbortSignal,
+  images: ChatImageAttachment[] = [],
 ): Promise<{ text: string; errors?: string[] }> {
   if (!agent) throw new Error("Engine is not ready yet.");
   let turnText = "";
   let pendingAssistantText = "";
   const errors: string[] = [];
+  const persistedImages = await persistChatImages(images);
   await logSessionEntry({ type: "user", content: sessionText });
+  if (persistedImages.length > 0) {
+    await logSessionUiEvent({
+      version: 1,
+      kind: "user-images",
+      id: randomUUID(),
+      data: { images: persistedImages },
+    });
+  }
   const flushAssistantText = async (): Promise<void> => {
     if (!pendingAssistantText) return;
     const content = pendingAssistantText;
     pendingAssistantText = "";
     await logSessionEntry({ type: "assistant", content });
   };
-  for await (const event of agent.run(text, "react", signal)) {
+  for await (const event of agent.run(
+    text,
+    "react",
+    signal,
+    persistedImages.map(({ mimeType, base64, name, workspacePath }) => ({
+      mimeType,
+      base64,
+      name,
+      ...(workspacePath ? { path: workspacePath } : {}),
+    })),
+  )) {
     if (signal?.aborted || cancelled) break;
     if (event.type === "text") {
       turnText += event.text;
@@ -2522,6 +2545,36 @@ async function runAgentTurn(
   return { text: turnText, ...(errors.length > 0 ? { errors } : {}) };
 }
 
+/** Stores each input in the current session's ignored workspace scratch folder. */
+async function persistChatImages(
+  images: ChatImageAttachment[],
+): Promise<ChatImageAttachment[]> {
+  if (images.length === 0) return [];
+  if (!session) throw new Error("Não há uma sessão ativa para salvar as imagens anexadas.");
+
+  const sessionId = session.id;
+  const directory = join(session.tmpDir, "chat-images");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const extensions: Record<ChatImageAttachment["mimeType"], string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+  };
+
+  return Promise.all(images.map(async (image) => {
+    const bytes = Buffer.from(image.base64, "base64");
+    if (!bytes.length || bytes.length > 8 * 1024 * 1024) {
+      throw new Error(`A imagem '${image.name}' é vazia ou excede 8 MB.`);
+    }
+    const extension = extensions[image.mimeType];
+    if (!extension) throw new Error(`Tipo de imagem inválido: ${image.mimeType}.`);
+    const filename = `${randomUUID()}.${extension}`;
+    const workspacePath = `.rubycli/tmp/${sessionId}/chat-images/${filename}`;
+    await writeFile(join(directory, filename), bytes, { flag: "wx", mode: 0o600 });
+    return { ...image, workspacePath };
+  }));
+}
+
 async function refreshSessionAfterTurn(): Promise<void> {
   await skillRegistry?.discover(process.cwd());
   if (skillRegistry) {
@@ -2545,7 +2598,11 @@ async function refreshSessionAfterTurn(): Promise<void> {
 }
 
 /** Runs one turn, streaming every engine event to the UI. */
-async function runPrompt(text: string, sessionText = text): Promise<void> {
+async function runPrompt(
+  text: string,
+  sessionText = text,
+  images: ChatImageAttachment[] = [],
+): Promise<void> {
   if (!agent) {
     post({ type: "error", message: "Engine is not ready yet." });
     return;
@@ -2563,7 +2620,7 @@ async function runPrompt(text: string, sessionText = text): Promise<void> {
   activeTurnController = new AbortController();
   post({ type: "status", status: "busy" });
   try {
-    await runAgentTurn(text, sessionText, activeTurnController.signal);
+    await runAgentTurn(text, sessionText, activeTurnController.signal, images);
   } catch (err) {
     fail(err);
   } finally {
@@ -2830,7 +2887,7 @@ async function handle(request: EngineRequest): Promise<void> {
     }
 
     case "prompt":
-      await runPrompt(request.text);
+      await runPrompt(request.text, request.text, request.images);
       return;
 
     case "activateSkill":

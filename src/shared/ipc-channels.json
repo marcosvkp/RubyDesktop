@@ -6,7 +6,8 @@
     "pickWorkspace": "ruby:pick-workspace",
     "saveApiKey": "ruby:save-api-key",
     "getAgentSettings": "ruby:get-agent-settings",
-    "saveAgentSettings": "ruby:save-agent-settings"
+    "saveAgentSettings": "ruby:save-agent-settings",
+    "pickChatImages": "ruby:pick-chat-images"
   },
   "send": {
     "prompt": "ruby:prompt",

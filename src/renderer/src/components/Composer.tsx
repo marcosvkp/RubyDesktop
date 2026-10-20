@@ -1,10 +1,42 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, ImagePlus, Square, X } from "lucide-react";
 import { useStore } from "../store";
 import { cn } from "../lib/utils";
 import { ChatStats } from "./ChatStats";
 import { ModelPicker } from "./ModelPicker";
 import { getSlashSuggestions } from "../slash-commands";
+import type { ChatImageAttachment, ChatImageMimeType } from "@shared/ipc";
+
+const IMAGE_LIMIT_BYTES = 8 * 1024 * 1024;
+const IMAGE_SET_LIMIT_BYTES = 16 * 1024 * 1024;
+const IMAGE_COUNT_LIMIT = 4;
+
+function toImageAttachment(file: File): Promise<ChatImageAttachment> {
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    return Promise.reject(new Error("Use imagens PNG, JPEG ou WebP."));
+  }
+  if (file.size > IMAGE_LIMIT_BYTES) {
+    return Promise.reject(new Error("Cada imagem deve ter no máximo 8 MB."));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Não foi possível ler a imagem da área de transferência."));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("O conteúdo da imagem está inválido."));
+        return;
+      }
+      const [, base64 = ""] = reader.result.split(",", 2);
+      resolve({
+        id: crypto.randomUUID(),
+        name: file.name || `imagem-colada.${file.type === "image/jpeg" ? "jpg" : file.type.slice(6)}`,
+        mimeType: file.type as ChatImageMimeType,
+        base64,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 /** Prompt composer with model selection and session telemetry kept in the chat. */
 export function Composer(): React.JSX.Element {
@@ -16,10 +48,15 @@ export function Composer(): React.JSX.Element {
   const queuedCount = useStore((s) => s.queuedMessages.length);
   const status = useStore((s) => s.status);
   const skills = useStore((s) => s.skills);
+  const models = useStore((s) => s.models);
+  const selectedModel = useStore((s) => s.model);
   const [text, setText] = useState("");
+  const [images, setImages] = useState<ChatImageAttachment[]>([]);
+  const [imageError, setImageError] = useState("");
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [suggestionsHidden, setSuggestionsHidden] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const canSeeImages = models.find((model) => model.id === selectedModel)?.supportsVision === true;
   const disabled = status !== "ready" && status !== "busy";
   const suggestions = getSlashSuggestions(text, skills);
   const showSuggestions = !disabled && !suggestionsHidden && suggestions.length > 0;
@@ -36,10 +73,48 @@ export function Composer(): React.JSX.Element {
     setSuggestionsHidden(false);
   }, [text]);
 
+  function addImages(incoming: ChatImageAttachment[]): void {
+    setImageError("");
+    const next = [...images, ...incoming];
+    if (next.length > IMAGE_COUNT_LIMIT) {
+      setImageError(`É possível anexar até ${IMAGE_COUNT_LIMIT} imagens por mensagem.`);
+      return;
+    }
+    const totalBytes = next.reduce(
+      (sum, image) => sum + Math.floor((image.base64.length * 3) / 4),
+      0,
+    );
+    if (totalBytes > IMAGE_SET_LIMIT_BYTES) {
+      setImageError("O total de imagens por mensagem deve ser de até 16 MB.");
+      return;
+    }
+    setImages(next);
+  }
+
+  async function chooseImages(): Promise<void> {
+    setImageError("");
+    try {
+      addImages(await window.ruby.pickChatImages());
+    } catch (error) {
+      setImageError(error instanceof Error ? error.message : "Não foi possível anexar as imagens.");
+    }
+  }
+
+  async function pasteImages(files: File[]): Promise<void> {
+    try {
+      const pasted = await Promise.all(files.map(toImageAttachment));
+      addImages(pasted);
+    } catch (error) {
+      setImageError(error instanceof Error ? error.message : "Não foi possível colar a imagem.");
+    }
+  }
+
   function submit(): void {
-    if (disabled || !text.trim()) return;
-    send(text);
+    if (disabled || (!text.trim() && images.length === 0) || (images.length > 0 && !canSeeImages)) return;
+    send(text.trim() || "Analise as imagens anexadas.", images);
     setText("");
+    setImages([]);
+    setImageError("");
   }
 
   function completeSuggestion(index = activeSuggestion): void {
@@ -102,6 +177,28 @@ export function Composer(): React.JSX.Element {
             disabled ? "border-border opacity-60" : "border-border focus-within:border-ring/60",
           )}
         >
+          {images.length > 0 ? (
+            <div className="flex flex-wrap gap-2 px-3 pt-3" aria-label="Imagens anexadas">
+              {images.map((image) => (
+                <div key={image.id} className="group relative h-16 w-16 overflow-hidden rounded-lg border border-line bg-background">
+                  <img
+                    src={`data:${image.mimeType};base64,${image.base64}`}
+                    alt={image.name}
+                    className="h-full w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
+                    aria-label={`Remover imagem ${image.name}`}
+                    title="Remover imagem"
+                    className="absolute top-0.5 right-0.5 rounded-full bg-black/75 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <textarea
             ref={ref}
             rows={1}
@@ -113,6 +210,16 @@ export function Composer(): React.JSX.Element {
             aria-activedescendant={showSuggestions ? `slash-option-${activeSuggestion}` : undefined}
             aria-expanded={showSuggestions}
             onChange={(event) => setText(event.target.value)}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.items)
+                .filter((item) => item.type.startsWith("image/"))
+                .map((item) => item.getAsFile())
+                .filter((file): file is File => file !== null);
+              if (files.length > 0) {
+                event.preventDefault();
+                void pasteImages(files);
+              }
+            }}
             onKeyDown={(event) => {
               if (showSuggestions && event.key === "ArrowDown") {
                 event.preventDefault();
@@ -150,6 +257,16 @@ export function Composer(): React.JSX.Element {
           />
 
           <div className="flex items-center gap-2 px-3 pb-2.5">
+            <button
+              type="button"
+              onClick={() => void chooseImages()}
+              disabled={disabled || images.length >= IMAGE_COUNT_LIMIT}
+              title="Adicionar imagens (ou cole com Ctrl+V)"
+              aria-label="Adicionar imagens"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            >
+              <ImagePlus className="h-4 w-4" />
+            </button>
             <span className="flex-1 pl-1 text-[10px] text-muted-foreground">
               {busy || compacting || queueCommandPending
                 ? `Enter adiciona à fila${queuedCount ? ` · ${queuedCount} pendente(s)` : ""}`
@@ -171,7 +288,7 @@ export function Composer(): React.JSX.Element {
             <button
               type="button"
               onClick={submit}
-              disabled={disabled || !text.trim()}
+              disabled={disabled || (!text.trim() && images.length === 0) || (images.length > 0 && !canSeeImages)}
               title={busy || compacting || queueCommandPending ? "Adicionar mensagem à fila" : "Enviar mensagem"}
               aria-label={busy || compacting || queueCommandPending ? "Adicionar mensagem à fila" : "Enviar mensagem"}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/20 transition-all hover:-translate-y-0.5 hover:opacity-90 disabled:translate-y-0 disabled:opacity-30 disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -179,6 +296,14 @@ export function Composer(): React.JSX.Element {
               <ArrowUp className="h-4 w-4" />
             </button>
           </div>
+          {images.length > 0 && !canSeeImages ? (
+            <p className="px-4 pb-2 text-[10px] text-amber-400" role="status">
+              O modelo selecionado não confirma suporte a imagens. Escolha um modelo com o ícone de visão para enviar.
+            </p>
+          ) : null}
+          {imageError ? (
+            <p className="px-4 pb-2 text-[10px] text-destructive" role="alert">{imageError}</p>
+          ) : null}
         </div>
 
         <ChatStats />

@@ -142,6 +142,18 @@ export function ChatView(): React.JSX.Element {
                     </span>
                     <span className="min-w-0 flex-1 whitespace-pre-wrap break-words pt-0.5 text-xs text-foreground">
                       {message.text}
+                      {message.images?.length ? (
+                        <span className="mt-2 flex gap-1.5">
+                          {message.images.map((image) => (
+                            <img
+                              key={image.id}
+                              src={`data:${image.mimeType};base64,${image.base64}`}
+                              alt={image.name}
+                              className="h-9 w-9 rounded-md border border-line object-cover"
+                            />
+                          ))}
+                        </span>
+                      ) : null}
                     </span>
                     <div className="flex shrink-0 items-center gap-0.5">
                       <button
@@ -211,8 +223,28 @@ const Item = memo(function Item({ item }: { item: ChatItem }): React.JSX.Element
     case "user":
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-lg border border-border bg-secondary px-4 py-2.5 text-sm whitespace-pre-wrap text-secondary-foreground">
-            {item.text}
+          <div className="max-w-[85%] rounded-lg border border-border bg-secondary px-4 py-2.5 text-sm text-secondary-foreground">
+            {item.images?.length ? (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {item.images.map((image) => (
+                  <a
+                    key={image.id}
+                    href={`data:${image.mimeType};base64,${image.base64}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Abrir ${image.name}`}
+                    className="block overflow-hidden rounded-lg border border-line/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <img
+                      src={`data:${image.mimeType};base64,${image.base64}`}
+                      alt={image.name}
+                      className="max-h-64 max-w-72 object-contain"
+                    />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            {item.text ? <p className="whitespace-pre-wrap">{item.text}</p> : null}
           </div>
         </div>
       );

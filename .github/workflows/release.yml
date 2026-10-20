@@ -50,10 +50,17 @@ jobs:
           path: RubyDesktop
           ref: ${{ inputs.release_tag || github.ref }}
 
+      - name: Read pinned RubyCLI commit
+        id: rubycli
+        working-directory: ${{ github.workspace }}/RubyDesktop
+        shell: bash
+        run: |
+          node -e 'const pin = require("./ruby-engine.lock.json"); console.log(`repository=${pin.repository}`); console.log(`ref=${pin.commit}`);' >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: ${{ vars.RUBYCLI_REPOSITORY || 'marcosvkp/rubycli' }}
-          ref: ${{ vars.RUBYCLI_REF }}
+          repository: ${{ steps.rubycli.outputs.repository }}
+          ref: ${{ steps.rubycli.outputs.ref }}
           path: RubyCLI
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -68,7 +75,7 @@ jobs:
         shell: bash
         working-directory: ${{ github.workspace }}/RubyDesktop
         env:
-          RUBYCLI_REF: ${{ vars.RUBYCLI_REF }}
+          RUBYCLI_REF: ${{ steps.rubycli.outputs.ref }}
         run: |
           node scripts/verify-engine-pin.cjs ../RubyCLI
           expected="v$(node -p "require('./package.json').version")"

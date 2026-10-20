@@ -11,6 +11,7 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   ApprovalScope,
+  ChatImageAttachment,
   EngineResponse,
   EngineStatus,
   GoalStatus,
@@ -37,7 +38,7 @@ import type {
 import { isKnownSlashCommand } from "./slash-commands";
 
 export type ChatItem =
-  | { kind: "user"; id: string; text: string }
+  | { kind: "user"; id: string; text: string; images?: ChatImageAttachment[] }
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   | {
       kind: "todo-list";
@@ -106,6 +107,7 @@ export interface QueuedMessage {
   id: string;
   text: string;
   createdAt: number;
+  images?: ChatImageAttachment[];
 }
 
 export function emptySessionUsageStats(): SessionUsageStats {
@@ -220,7 +222,7 @@ interface State {
   handleMessage: (message: EngineResponse) => void;
   /** Append a local notice — used by slash commands, which have no engine reply. */
   pushNotice: (text: string, tone?: "info" | "error") => void;
-  send: (text: string) => void;
+  send: (text: string, images?: ChatImageAttachment[]) => void;
   removeQueuedMessage: (id: string) => void;
   moveQueuedMessage: (id: string, direction: -1 | 1) => void;
   drainQueue: () => void;
@@ -402,6 +404,28 @@ function parseToolImages(value: unknown): ToolImageArtifact[] | undefined {
     totalChars += entry.base64.length;
     if (totalChars > MAX_IMAGE_SET_BASE64_CHARS) return undefined;
     images.push(entry as unknown as ToolImageArtifact);
+  }
+  return images;
+}
+
+function parseChatImages(value: unknown): ChatImageAttachment[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return undefined;
+  let totalChars = 0;
+  const images: ChatImageAttachment[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      typeof entry.name !== "string" ||
+      !["image/png", "image/jpeg", "image/webp"].includes(String(entry.mimeType)) ||
+      typeof entry.base64 !== "string" ||
+      entry.base64.length === 0 ||
+      entry.base64.length > 11_184_812 ||
+      !BASE64_IMAGE_PATTERN.test(entry.base64)
+    ) return undefined;
+    totalChars += entry.base64.length;
+    if (totalChars > 22_369_624) return undefined;
+    images.push(entry as unknown as ChatImageAttachment);
   }
   return images;
 }
@@ -829,6 +853,16 @@ function restoreTranscript(entries: SessionEntry[]): ChatItem[] {
         }
         const item = index >= 0 ? items[index] : undefined;
         if (item?.kind === "tool") items[index] = { ...item, images };
+      } else if (kind === "user-images") {
+        const images = parseChatImages(data.images);
+        if (!images) continue;
+        for (let i = items.length - 1; i >= 0; i--) {
+          const item = items[i];
+          if (item?.kind === "user") {
+            items[i] = { ...item, images };
+            break;
+          }
+        }
       }
     }
   }
@@ -1067,8 +1101,9 @@ function dispatchText(
   text: string,
   get: () => State,
   set: (partial: Partial<State> | ((state: State) => Partial<State>)) => void,
+  images: ChatImageAttachment[] = [],
 ): boolean {
-  if (isKnownSlashCommand(text, get().skills)) {
+  if (images.length === 0 && isKnownSlashCommand(text, get().skills)) {
     set((s) => ({
       items: [
         ...closeStreaming(s.items),
@@ -1085,12 +1120,12 @@ function dispatchText(
   set((s) => ({
     items: [
       ...closeStreaming(s.items),
-      { kind: "user", id: nextId(), text },
+      { kind: "user", id: nextId(), text, ...(images.length ? { images } : {}) },
     ],
     turnCount: s.turnCount + 1,
     busy: true,
   }));
-  window.ruby.sendPrompt(text);
+  window.ruby.sendPrompt(text, images.length ? images : undefined);
   return true;
 }
 
@@ -1558,21 +1593,21 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  send: (text) => {
+  send: (text, images = []) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && images.length === 0) return;
     const state = get();
     if (state.busy || state.compacting || state.queueCommandPending) {
       set((s) => ({
         queuedMessages: [
           ...s.queuedMessages,
-          { id: nextId(), text: trimmed, createdAt: Date.now() },
+          { id: nextId(), text: trimmed, createdAt: Date.now(), ...(images.length ? { images } : {}) },
         ],
       }));
       return;
     }
 
-    dispatchText(trimmed, get, set);
+    dispatchText(trimmed || "Analise as imagens anexadas.", get, set, images);
   },
 
   removeQueuedMessage: (id) => {
@@ -1610,7 +1645,12 @@ export const useStore = create<State>((set, get) => ({
     const [next, ...remaining] = state.queuedMessages;
     if (!next) return;
     set({ queuedMessages: remaining });
-    const waitingForResponse = dispatchText(next.text, get, set);
+    const waitingForResponse = dispatchText(
+      next.text || "Analise as imagens anexadas.",
+      get,
+      set,
+      next.images,
+    );
 
     // Local commands such as /help do not start an engine turn. Keep draining
     // those in order; model turns and compaction stop the queue until completion.

@@ -30,7 +30,9 @@ const api: RubyDesktopApi = {
   saveAgentSettings: (settings) =>
     ipcRenderer.invoke(IPC.invoke.saveAgentSettings, settings),
 
-  sendPrompt: (text) => ipcRenderer.send(IPC.send.prompt, text),
+  pickChatImages: () => ipcRenderer.invoke(IPC.invoke.pickChatImages),
+
+  sendPrompt: (text, images) => ipcRenderer.send(IPC.send.prompt, text, images),
 
   activateSkill: (name, args) =>
     ipcRenderer.send(IPC.send.activateSkill, name, args),

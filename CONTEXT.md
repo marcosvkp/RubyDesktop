@@ -11,6 +11,8 @@
 obrigatório no projeto via `save_path`. Fixa o RubyCLI em
 `e7fbd81d2bb0bd58c1305438e4b208bcd46563cf` e inclui 17 artefatos Windows, Linux e macOS. A CI
 `39300373579` e a release `39300378171` passaram nos três sistemas.
+O candidato `v0.1.9` adiciona anexos de imagem no chat; M7.1 está implementado no Desktop e RubyCLI,
+com publicação multiplataforma em andamento. O pin é `rubycli@002098dab21e6540da4068d86dbd41e939efe928`.
 `v0.1.7` foi publicada em 2026-10-18 com o painel local de Git/worktrees, melhorias no painel MCP e
 execução paralela consultável dos subagentes. Ela fixa o RubyCLI em
 `3af15adcd0a78cb37b459f0947a7dcc4d47c9723` e inclui 17 artefatos Windows, Linux e macOS. A CI
@@ -20,11 +22,12 @@ RubyCLI em `2dda3e29ddb75c0f118c1e18746a20fe1947f2a9`, inclui 41 Skills embutida
 em 2026-10-17 com 17 artefatos Windows, Linux e macOS. Ela adiciona effort de reasoning configurável
 e persistente, além da lista de tarefas do agente no chat. O agente principal tem limite de ciclos
 configurável de 1 a 500 (padrão 50). Windows/macOS permanecem sem assinatura; Linux inclui o feed de
-atualização. A próxima etapa de M7 é anexar imagens de entrada ao chat e ampliar os smokes de
-hardening/restauração. O suporte de imagem da engine está publicado no RubyCLI e o Desktop fixa seu
-commit diretamente, sem depender da publicação no npm.
+atualização. M7.1 (anexos de entrada multimodais) está implementado no Desktop e RubyCLI e incluído
+no candidato `v0.1.9`; faltam os resultados do workflow multiplataforma, cobertura de smoke/regressão
+e validação com provider. O suporte de imagem da engine é compilado diretamente do RubyCLI, sem
+depender da publicação no npm.
 
-### Verificação atual — 2026-10-19
+### Verificação atual — 2026-10-20
 
 - M7.2: RubyCLI oferece `image_models` (`GET /v1/images/models`), `image_quote`
   (`POST /v1/images/quote`) e `image_generate` (`POST /v1/images/generations`); o Desktop adiciona
@@ -41,8 +44,13 @@ commit diretamente, sem depender da publicação no npm.
   garantia de não armazenar prompts/imagens no servidor.
 - A tool `image_models` consulta `GET /v1/images/models` e retorna os ids habilitados para geração;
   o agente não deve procurar esses ids nos arquivos do workspace nem usar o catálogo de modelos de chat.
-  `supportsVision` não é usado como substituto. A edição aceita PNG/JPEG/WebP no workspace, até 12 MB;
-  anexos enviados pelo usuário no composer ainda não estão implementados.
+  `supportsVision` não é usado como substituto. A edição aceita PNG/JPEG/WebP no workspace, até 12 MB.
+- M7.1 (implementado em 2026-10-20): o composer aceita seleção de imagens e colagem com
+  Ctrl+V. O processo principal valida PNG/JPEG/WebP, assinatura e limites antes de encaminhar os bytes.
+  A engine envia partes de imagem para os adapters OpenAI-compatible, Anthropic e Gemini; salva uma
+  cópia por sessão em `.rubycli/tmp/<session>/chat-images/` e inclui o caminho relativo no contexto,
+  disponível para `image_edit`. O evento JSONL local mantém os bytes e restaura a imagem e o caminho ao
+  retomar a sessão. `npm run build` do RubyCLI e do Desktop passou; ainda não houve chamada ao provider.
 - A cotação envia `referenceCount: 0`, e o parser aceita os campos de créditos aninhados e como número
   ou string. A geração aceita `resolution` e `aspect_ratio`, lê `media_type` no item ou na resposta e exibe
   `usage.credits` quando a API retorna esse dado.
@@ -96,8 +104,8 @@ commit diretamente, sem depender da publicação no npm.
 - A release aceita builds unsigned de Windows/macOS, emite aviso e omite os feeds dessas plataformas;
   quando os certificados estão configurados, valida assinatura/notarização e os feeds. Linux mantém
   seu feed. O coletor limpa o staging e só inclui assets da versão atual.
-- `RUBYCLI_REF` agora é obrigatório e deve ser o SHA completo de 40 caracteres do commit RubyCLI;
-  CI e release falham cedo se a variável faltar ou divergir do `ruby-engine.lock.json`.
+- O workflow de release lê o repositório e o SHA imutável diretamente de `ruby-engine.lock.json`,
+  então não depende de uma Actions variable manual `RUBYCLI_REF`.
 - A blocklist catastrófica também é aplicada em `decideConfirmation` no RubyCLI; grants `bash:*`
   e grants exatos não liberam comandos catastróficos. Confirmação manual permite só uma execução.
 - `tool_call` e `tool_result` agora podem carregar IDs do provider. O Desktop usa esses IDs para
@@ -106,7 +114,7 @@ commit diretamente, sem depender da publicação no npm.
   diff revisado contra alterações posteriores, staging de releases sem assets antigos/feed quebrado,
   os caminhos de update automático/fallback/instalação e o modo Node stdio do executável empacotado
   em Windows/macOS/Linux (caminho usado por subprocessos MCP).
-- `RUBYCLI_REF` foi atualizado para o SHA novo. Não há segredos de code signing/notarização no
+- O pin da engine fica em `ruby-engine.lock.json`. Não há segredos de code signing/notarização no
   repositório; o workflow agora pode publicar instaladores unsigned de Windows/macOS, que podem
   mostrar avisos do sistema e não terão update automático. Ainda falta rodar os seis smokes com
   provider disponível e validar os instaladores abrindo/instalando em Windows/macOS/Linux (incluindo
@@ -286,10 +294,10 @@ cd G:\VSCodeProjects\RubyDesktop ; npm run dist
 npm run package:dir
 ```
 
-No GitHub, configure `RUBYCLI_REF` como Actions variable obrigatória: SHA completo de 40 caracteres
-igual ao commit aprovado em `ruby-engine.lock.json`. `RUBYCLI_REPOSITORY` é opcional e, por padrão,
-a CI clona `marcosvkp/rubycli`. A engine deve estar commitada e enviada ao seu próprio repositório;
-a CI não espera publicação no npm. A tag deve corresponder a `package.json` (por exemplo, `v0.1.3`).
+O workflow lê o repositório e o SHA completo da engine em `ruby-engine.lock.json`; não é preciso
+configurar `RUBYCLI_REF` manualmente. A engine deve estar commitada e enviada ao seu próprio
+repositório; a CI não espera publicação no npm. A tag deve corresponder a `package.json` (por exemplo,
+`v0.1.9`).
 O workflow por tag cria um draft; `workflow_dispatch` também só atualiza um draft e recusa alterar
 uma release publicada.
 
@@ -315,16 +323,20 @@ o provider. Builds locais sem publicação também continuam possíveis sem cert
 - Verificação local desta implementação: `npm run typecheck` e `npm run build` passaram. Os smoke
   scripts não foram executados nesta rodada.
 
-### M7 — Geração, edição e gravação de imagens; anexos de entrada pendentes
+### M7 — Geração, edição e anexos de entrada multimodais
 
-O composer atual envia texto. O indicador `supportsVision` do catálogo só descreve capacidade do
-modelo; ele não significa que o Desktop envie imagens anexadas pelo usuário. A tool `browser_screenshot`
-salva PNG na pasta de dados do app e retorna texto, sem anexar a imagem à conversa. M7.2 adiciona
-geração, edição por caminho local e gravação obrigatória no workspace via Ruby API.
+O indicador `supportsVision` descreve a capacidade do modelo. O Desktop agora envia os bytes das imagens
+anexadas como partes multimodais; também cria uma cópia local por sessão para ferramentas que precisam
+de um caminho de arquivo. A tool `browser_screenshot` segue salvando PNG na pasta de dados do app e
+retorna texto, sem anexar a imagem à conversa. M7.2 adiciona geração, edição por caminho local e
+gravação obrigatória no workspace via Ruby API.
 
-- **M7.1 — Anexos de entrada (pendente):** escolher imagem, colar da área de transferência ou arrastar e soltar;
-  mostrar prévia e permitir remoção antes do envio. Validar MIME e tamanho no processo principal e
-  transportar bytes/referências pelo IPC sem dar acesso geral ao filesystem ao renderer.
+- **M7.1 — Anexos de entrada (implementado no candidato v0.1.9):** escolher imagem pelo botão do composer ou
+  colar com Ctrl+V; mostrar prévia e permitir remoção antes do envio. O processo principal valida MIME,
+  assinatura e limites, e transporta bytes pelo IPC sem dar acesso geral ao filesystem ao renderer.
+  RubyCLI envia os bytes aos adapters multimodais e restaura os anexos a partir de eventos JSONL.
+  Cada imagem recebe uma cópia em `.rubycli/tmp/<session>/chat-images/`; o caminho relativo é incluído
+  no contexto do agente para uso em `image_edit`. Arrastar e soltar ainda não está implementado.
 - **M7.2 — Tools de imagem (publicadas na v0.1.8):** RubyCLI exporta `createImageTools` e o Desktop
   registra as tools somente com provider Ruby e chave configurada. `image_models` consulta
   `GET /v1/images/models`; `image_quote` usa
@@ -338,16 +350,17 @@ geração, edição por caminho local e gravação obrigatória no workspace via
   opt-in de autonomia. A estimativa continua automática e não abre uma pergunta ao usuário. O
   executor entrega base64 ao host em campo UI-only separado do resultado que volta ao modelo. O
   renderer mostra a prévia e oferece download; o evento versionado persiste a imagem no JSONL local.
-- **Armazenamento:** toda geração/edição grava o arquivo no projeto via `save_path` e mantém a prévia
-  no JSONL local da sessão para restauração. Não é usada pasta temporária. A Ruby declara que prompts e
-  imagens não são armazenados no servidor.
+- **Armazenamento:** geração/edição grava o arquivo no projeto via `save_path` e mantém a prévia no
+  JSONL local da sessão para restauração. Anexos de entrada são copiados à pasta temporária local da
+  sessão e registrados em JSONL para restauração. A Ruby declara que prompts e imagens não são
+  armazenados no servidor.
 - **M7.3 — Segurança e aceitação (parcial):** testes determinísticos cobrem a geração; a edição valida
-  caminho, tamanho, MIME e assinatura. Ainda faltam anexos de entrada, metadados adicionais do catálogo
-  e smokes específicos para edição, gravação e preferência de autonomia.
+  caminho, tamanho, MIME e assinatura. Ainda faltam smokes específicos para anexos/restauração, edição,
+  gravação e preferência de autonomia, além de metadados adicionais do catálogo.
 
-**Próxima etapa:** anexos de entrada com seleção/colar/arrastar, validação no processo principal,
-payload multimodal com `supportsVision` e persistência local por referência. Depois, acrescentar smokes
-de regressão para edição, gravação e preferência de autonomia.
+**Próxima etapa:** ampliar os smokes de regressão para anexos/restauração, edição, gravação e preferência
+de autonomia; validar com um provider de visão e completar os metadados do catálogo. Arrastar e soltar
+fica como melhoria opcional do composer.
 
 ---
 
@@ -499,7 +512,7 @@ credencial OpenAI configurada foi rejeitada e o subprocesso Node encerrou com as
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Code signing no Windows/macOS** | Sem certificado, instalações podem gerar avisos e a atualização é manual nessas plataformas | Configurar os segredos antes de distribuir amplamente; o verificador do GitHub já oferece o link de download |
 | **Release multiplataforma**       | `v0.1.6` oferece Windows/Linux/macOS; builds sem assinatura exibem avisos no Windows/macOS e não recebem update automático | Validar a instalação nos três sistemas e configurar certificados antes de distribuir amplamente |
-| **CI/smokes live**                | Os smokes live dependem do provider e da chave; assinaturas são opcionais no fluxo atual       | `RUBYCLI_REF` está atualizado; adicionar `RUBY_API_KEY` para executar os smokes live |
+| **CI/smokes live**                | Os smokes live dependem do provider e da chave; assinaturas são opcionais no fluxo atual       | Adicionar `RUBY_API_KEY` para executar os smokes live |
 
 ---
 
@@ -553,8 +566,8 @@ Cada uma dessas custou tempo real. Estão aqui para não custarem de novo.
 
 1. Executar `npm run eval` e os smokes que dependem do provider quando houver uma chave válida e o
    serviço estiver respondendo; investigar a assertion nativa do Node se continuar após autenticar.
-2. Continuar M7 com anexos de entrada e roteamento multimodal para modelos com visão; depois criar
-   smokes para edição, salvamento no workspace e preferência de geração autônoma.
+2. Validar M7.1 com um provider de visão e ampliar os smokes para anexos/restauração, edição,
+   salvamento no workspace e preferência de geração autônoma.
 3. Validar os instaladores empacotados em Windows, macOS e Linux. Windows é o teste local disponível;
    macOS/Linux dependem de máquinas desses sistemas.
 4. Configurar certificados Windows/macOS caso se queira reduzir alertas do instalador e habilitar
